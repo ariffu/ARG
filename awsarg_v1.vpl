@@ -1,0 +1,2791 @@
+//-----------------------------------------------------------------------------
+// AWS ARG V.3 1 Maret 2018, MQTT Publish
+// 
+//-----------------------------------------------------------------------------
+INCLUDE rtcu.inc
+INCLUDE math.inc
+
+VAR
+ServicePort:sint:=0;
+DataPort:sint:=1;
+clock:clockGet;
+gps_fix : gpsFix;
+
+RX_MainMenu : serFrameReceiver;
+RX_SerialIn : serFrameReceiver;
+RX_SerialApn : serFrameReceiver;
+RX_InformasiPerangkat: serFrameReceiver;
+RX_PengaturanDasar: serFrameReceiver;
+RX_PengaturanLanjutan: serFrameReceiver;
+RX_PengaturanApn: serFrameReceiver;
+RX_TestFTP:serFrameReceiver;
+RX_ParameterDasar: serFrameReceiver;
+RX_ParameterWorking: serFrameReceiver;
+RX_ParameterLanjutan: serFrameReceiver;
+RX_ParameterApn: serFrameReceiver;
+RX_Data             : serFrameReceiver; 
+RX_DebugMessage: serFrameReceiver;
+   
+MainMenu_exit:bool:=false;
+InformasiPerangkat_exit:bool:=false;
+PengaturanDasar_exit:bool:=false;
+PengaturanLanjutan_exit:bool:=false;
+PengaturanApn_exit:bool:=false;
+TestFTP_Exit:bool:=false;
+TestMode:bool:=false;
+ParameterDasar_exit:bool:=false;
+ParameterWorking_exit:bool:=false;
+ParameterLanjutan_exit:bool:=false;
+ParameterApn_exit:bool:=false;
+DebugMessage_exit:bool:=false;
+Debug_bool:bool:=false;
+Reboot:bool:=false;
+Scan_Campbell:bool:=false;
+
+
+logfile1:string:="awslog.txt";
+logfile2:string:="ydoclog.txt";
+bufferbool:bool:=false;
+logwriter : logWrite;
+logreader : logRead;
+linsectotime : clockLinsecToTime;
+
+sms      : gsmIncomingSMS; // Receives incoming SMS messages
+sms_rec  : STRING;
+sms_len  : INT;
+   
+incoming : gsmIncomingCall;
+incoming_ok : INT :=0;
+incoming_no : STRING;
+
+rain_24h     : PCT; 
+rfbuffer:string;
+scanning_reset,scanning_log:bool;
+mod_check_reset,mod_check_log:bool;
+
+ftp_open_id,ftp_connect_id,ftp_filesend_id:int;
+
+internal_baterai:bool:=false;
+low_baterai:bool:=false;
+ctr_baterai:dint;
+END_VAR;
+
+VAR_INPUT
+dig_in5 : BOOL:=FALSE; | Digital Input for ARG
+END_VAR;
+
+Function Inisialisasi;
+var
+   workingmode:string;
+end_var;
+clock();
+if LoadStringF(index:=1)="" then SaveStringF(index:=1,str:="m2minternet"); end_if;        // gprs apn
+if LoadStringF(index:=2)="" then SaveStringF(index:=2,str:=""); end_if;                   // gprs username
+if LoadStringF(index:=3)="" then SaveStringF(index:=3,str:=""); end_if;                   // gprs password
+if LoadStringF(index:=4)="" then SaveStringF(index:=4,str:="y"); end_if;                  // gateway enabled
+if LoadStringF(index:=5)="" then SaveStringF(index:=5,str:="telemetri.online"); end_if;   // gateway ip
+if LoadStringF(index:=6)="" then SaveStringF(index:=6,str:="5000"); end_if;               // gateway port
+if LoadStringF(index:=7)="" then SaveStringF(index:=7,str:="202.90.198.212"); end_if;     // ftp ip
+if LoadStringF(index:=8)="" then SaveStringF(index:=8,str:="21"); end_if;                 // ftp port
+if LoadStringF(index:=9)="" then SaveStringF(index:=9,str:="arg"); end_if;                // ftp username
+if LoadStringF(index:=10)="" then SaveStringF(index:=10,str:="arg"); end_if;              // ftp password
+if LoadStringF(index:=11)="" then SaveStringF(index:=11,str:="staxxx"); end_if;           // ftp stasiun id
+if LoadStringF(index:=12)="" then SaveStringF(index:=12,str:="y"); end_if;                // MQTT Publish Enabled
+if LoadStringF(index:=13)="" then SaveStringF(index:=13,str:="202.90.198.159"); end_if;   // MQTT ip
+if LoadStringF(index:=14)="" then SaveStringF(index:=14,str:="1883"); end_if;             // MQTT port
+if LoadStringF(index:=15)="" then SaveStringF(index:=15,str:="bmkg_aws"); end_if;         // MQTT username
+if LoadStringF(index:=16)="" then SaveStringF(index:=16,str:="bmkg_aws123"); end_if;      // MQTT password
+if LoadStringF(index:=17)="" then SaveStringF(index:=17,str:="+62817129925"); end_if;     // gsm admin
+if LoadStringF(index:=18)="" then SaveStringF(index:=18,str:="+62817129925"); end_if;     // gsm alarm
+if LoadStringF(index:=19)="" then SaveStringF(index:=19,str:="arg"); end_if;              // working mode
+if LoadStringF(index:=20)="" then SaveStringF(index:=20,str:="0.2"); end_if;              // resolusi
+if LoadStringF(index:=21)="" then SaveStringF(index:=21,str:="10"); end_if;               // interval data
+if LoadStringF(index:=22)="" then SaveStringF(index:=22,str:="+62817129925"); end_if;     // gsm pengamat hujan harian
+if LoadStringF(index:=23)="" then SaveStringF(index:=23,str:="0"); end_if;                // reset time
+if LoadStringF(index:=24)="" then SaveStringF(index:=24,str:="dki"); end_if;              //lokasi mqtt
+
+SaveString(index:=18,str:=""); // status -->gprs connected 
+SaveString(index:=19,str:=""); // IP Address --> gprs connected
+SaveString(index:=20,str:=""); // status --> rtu gateway connected
+
+workingmode:=LoadStringF(index:=19);
+if workingmode="modem" or workingmode="MODEM" then
+   IF NOT logIsInitialized(key:=1111) THEN
+      logInitialize(key:=1111, numlogvalues:=8, numlogrecords:=1000);
+   END_IF;
+End_if;
+if workingmode="arg" or workingmode="ARG" then
+   if  strToSint(str:=LoadString(index:=53)) = clock.day then 
+      rfbuffer:=LoadString(index:=57);
+   else
+      rfbuffer:="0.0";
+   end_if; 
+   SaveString(index:=57,str:="0.0");
+   IF NOT logIsInitialized(key:=2222) THEN
+      logInitialize(key:=2222, numlogvalues:=2, numlogrecords:=500);
+   END_IF;
+End_if;
+End_function;
+
+Function Alert_Baterai
+var
+   staid,smsphone,smsmsg:string;
+   bt:string;
+end_var;
+If low_baterai then
+   if ctr_baterai=1 then
+   staid    :=LoadStringF(index:=11);
+   smsphone:=LoadStringF(index:=18);
+   bt:=LoadString(index:=7);
+   DebugMsg(message:="Baterai Alert : "+bt+" volt");
+   smsmsg:="ALERT: "+staid+ " BATERAI LEVEL= "+bt+" volt";
+   gsmSendSMS(phonenumber:=smsphone, message:=smsmsg);
+   DebugMsg(message:="SMS Transmit to User:"+smsphone+ " Message:"+ smsmsg);
+   DebugMsg(message:="SMS Baterai Alert Transmit to User");
+   low_baterai:=false; 
+   end_if;
+end_if;
+End_Function;
+
+Function Read_Battery;
+var
+   bt,boardsn:string;
+   float_bt:float;
+end_var;
+bt := intToStr(v:=boardSupplyVoltage());
+float_bt:=strToFloat(str:=bt)*0.1;
+if float_bt<10.0 then 
+   low_baterai:=true; 
+   ctr_baterai:=ctr_baterai+1;
+end_if;
+bt:=floatToStr(v:=float_bt);
+SaveString(index:=7,str:=bt);
+
+boardsn:=dintToStr(v:=boardSerialNumber());
+SaveString(index:=8,str:=boardsn);
+End_function;
+
+FUNCTION Read_GPS;
+var
+   
+   lat_minute,lat_deg:string;
+   lon_minute,lon_deg:string;
+   lat_float:float;
+   lon_float:float;
+   latitude,longitude,status:string;
+end_var;
+gpsPower(power := ON); 
+                                        
+gps_fix();
+case gps_fix.mode of
+   0 : SaveString(index:=9,str:="No info available");
+   1 : SaveString(index:=9,str:="Fix unavailable.");
+   2 : SaveString(index:=9,str:="2D fix");
+   3 : SaveString(index:=9,str:="3D fix");
+   4 : SaveString(index:=9,str:="3D fix + SBAS");
+   5 : SaveString(index:=9,str:="Dead Reckoning fix");
+end_case;
+IF gps_fix.mode>1 THEN
+      lat_deg:=sintToStr(v:=gps_fix.latdeg)+".0";
+      lat_minute:=sintToStr(v:=gps_fix.latmin)+"."+intToStr(v:=gps_fix.latdecmin);
+      lat_float:=strToFloat(str:=lat_deg)+(strToFloat(str:=lat_minute)/60.0);
+      latitude:=floatToStr(v:=lat_float);
+      if gps_fix.latsouth then 
+         latitude:="-"+latitude;
+      end_if;
+      
+      lon_deg:=intToStr(v:=gps_fix.londeg)+".0";
+      lon_minute:=sintToStr(v:=gps_fix.lonmin)+"."+intToStr(v:=gps_fix.londecmin);
+      lon_float:=strToFloat(str:=lon_deg)+(strToFloat(str:=lon_minute)/60.0);
+      longitude:=floatToStr(v:=lon_float);
+      if gps_fix.lonwest then 
+         longitude:="-"+longitude;
+      end_if;
+      DebugMsg(message:="latitude:"+latitude);
+      DebugMsg(message:="longitude:"+longitude);
+      SaveString(index:=10,str:=latitude);
+      SaveString(index:=11,str:=longitude);
+END_IF;
+gpsPower(power := Off);
+END_FUNCTION;
+
+FUNCTION Read_GSM;
+var
+   cgi,utctime:dint;
+   mnc,networktype:int;
+   mnc_str,provider,imei,imsi,iccid,signal,signaldbm,signalstrength,netgsm:string;
+end_var;
+
+gsmPower(power:=ON);
+DebugFmt(message:="GSM Provider Searching");
+WHILE NOT gsmConnected() DO 
+   DebugMsg(message:="Waiting for GSM connection");
+   Sleep(delay:=1000); 
+END_WHILE;
+cgi:=gsmGetCurrentProvider();
+mnc_str:=strRight(str:=dintToStr(v:=cgi), length:=2);
+mnc:=strToInt(str:=mnc_str);
+case mnc of
+      00: provider:="PSN";
+      01: provider:="Indosat Ooredoo";
+      03: provider:="Indosat StarOne";
+      07: provider:="Telkom Flexy";
+      08: provider:="Axis";
+      09: provider:="Smartfren";
+      10: provider:="Telkomsel";
+      11: provider:="XL Axiata";
+      20: provider:="Telkom Mobile";
+      21: provider:="Indosat M3";
+      27: provider:="Sampoerna Ceria";
+      28: provider:="Mobile-8 Fren/Hepi";
+      88: provider:="Internux Bolt";
+      89: provider:="Hutchison 3";
+      99: provider:="Bakrie Esia";
+end_case;
+DebugMsg(message:="Current provider = "+provider);
+imei:=gsmGetIMEI();
+imsi:=gsmGetIMSI();
+iccid:= gsmGetICCID();
+signal:=sintToStr(v:=gsmSignalLevel());
+signaldbm:=sintToStr(v:=gsmSignalLevel(dbm:=true));
+signalstrength:=signaldbm+" dBm ("+ signal+ "%)";
+networktype:=gsmGetNetworkType();
+case networktype of 
+   2 : netgsm:="2G";
+   3 : netgsm:="3G";
+   else
+      netgsm:="not connected/unknow";
+end_case;
+
+SaveString(index:=12,str:=provider);
+SaveString(index:=13,str:=imei);
+SaveString(index:=14,str:=imsi);
+SaveString(index:=15,str:=iccid);
+SaveString(index:=16,str:=signalstrength);
+SaveString(index:=17,str:=netgsm);
+utctime:=gsmNetworkTime();
+clockSet(Linsec:=utctime);
+//utctime:=localtime+(-7*60*60);
+//if utctime>0 then clockSet(Linsec :=utctime);  end_if;
+
+End_Function;
+
+FUNCTION GPRS_Open;  
+var
+   gprs_user,gprs_pass,gprs_apn:string;
+end_var;
+gprsClose();
+gprs_apn :=LoadStringF(index:=1);
+gprs_user:=LoadStringF(index:=2);
+gprs_pass:=LoadStringF(index:=3);
+sockSetTCPIPParm(Username := gprs_user, Password := gprs_pass,APN := gprs_apn);
+gprsOpen();
+if gprsConnected() then
+   SaveString(index:=18,str:="GPRS Connected");
+   SaveString(index:=19,str:=sockIPToName(ip:=sockGetLocalIP()));
+else
+   SaveString(index:=18,str:="GPRS Not Connected"); 
+   SaveString(index:=19,str:="0.0.0.0");
+end_if;
+END_FUNCTION;
+
+Function GPRS_Refresh;
+While not gprsConnected() DO
+   DebugMsg(message:="Waiting for GPRS connection");
+   serSendString(port:=ServicePort, str:=" Wait..."+"$N");
+   Sleep(delay:=1000);
+End_While;
+DebugMsg(message:="GPRS Connection : SUCCESS");
+SaveString(index:=18,str:="GPRS Connected");
+SaveString(index:=19,str:=sockIPToName(ip:=sockGetLocalIP()));
+End_Function;
+
+Function Read_GPRS;
+if gprsConnected() then
+   SaveString(index:=18,str:="GPRS Connected");
+   SaveString(index:=19,str:=sockIPToName(ip:=sockGetLocalIP()));
+else
+   SaveString(index:=18,str:="GPRS Not Connected"); 
+   SaveString(index:=19,str:="0.0.0.0");
+end_if;
+End_Function;
+
+FUNCTION Gateway_Open;
+var
+   gw_ip,gw_open:string;
+   gw_port:dint;
+end_var;
+gwClose();
+gw_open:=LoadStringF(index:=4);
+gw_ip:=LoadStringF(index:=5);
+gw_port:=strToDint(str:=LoadStringF(index:=6));
+sockSetGWParm(gwEnabled := false, GWIP := gw_ip, GWPort := gw_port, GWKey := "AABBCCDD");
+if gw_open="y" or gw_open="Y" then
+   gwOpen();
+else
+   gwClose();
+end_if;
+
+if gwConnected() then
+   SaveString(index:=20,str:="Gateway Connected");
+else
+   SaveString(index:=20,str:="Gateway Not Connected"); 
+end_if;
+
+END_FUNCTION;
+
+Function Read_Gateway;
+if gwConnected() then
+   SaveString(index:=20,str:="Gateway Connected");
+else
+   SaveString(index:=20,str:="Gateway Not Connected"); 
+end_if;
+End_Function;
+
+Function InformasiPerangkat;
+var
+   baterai,boardsn,rr:string;
+   gpsmode,lat,lon:string;
+   gsmclock,rtuclock:string;
+   provider,imei,imsi,iccid,signalstrength,netgsm:string;
+   gprsapn,gprsusername,gprspassword,gprsstatus,gprsip:string;
+   gw_mode,gw_ip,gw_port,gw_status:string;
+   ftp_ip,ftp_port,ftp_user,ftp_pass,ftp_staid:string;
+   mqtt_status,mqtt_ip,mqtt_port,mqtt_lokasi:string;
+   gsm_base,gsm_staid,gsm_admin,gsm_observer,gsm_alarm:string;
+   workingmode:string;
+   resolusi,intervaldata,resettime:string;
+end_var;
+//data proses di Standard Flash
+baterai:=LoadString(index:=7);
+boardsn:=LoadString(index:=8);
+gpsmode:=LoadString(index:=9);
+lat:=LoadString(index:=10);
+lon:=LoadString(index:=11);
+provider:=LoadString(index:=12);
+imei:=LoadString(index:=13);
+imsi:=LoadString(index:=14);
+iccid:=LoadString(index:=15);
+signalstrength:=LoadString(index:=16);
+netgsm:=LoadString(index:=17);
+gprsstatus:=LoadString(index:=18);
+gprsip:=LoadString(index:=19);
+gw_status:=LoadString(index:=20);
+rr:=LoadString(index:=57);
+
+//data input di FRAM
+gprsapn     :=LoadStringF(index:=1);
+gprsusername:=LoadStringF(index:=2);
+gprspassword:=LoadStringF(index:=3);
+gw_mode     :=LoadStringF(index:=4);
+if gw_mode="y" or gw_mode="Y" then
+   gw_mode:="Enabled";
+else
+   gw_mode:="Disabled";
+end_if;
+gw_ip       :=LoadStringF(index:=5);
+gw_port     :=LoadStringF(index:=6);
+ftp_ip      :=LoadStringF(index:=7);
+ftp_port    :=LoadStringF(index:=8);
+ftp_user    :=LoadStringF(index:=9);
+ftp_pass    :=LoadStringF(index:=10);
+ftp_staid   :=LoadStringF(index:=11);
+mqtt_status :=LoadStringF(index:=12);
+if mqtt_status="y" or mqtt_status="Y" then
+   mqtt_status:="Enabled";
+else
+   mqtt_status:="Disabled";
+end_if;
+mqtt_ip     :=LoadStringF(index:=13);
+mqtt_port   :=LoadStringF(index:=14);
+mqtt_lokasi :=LoadStringF(index:=24);
+gsm_base    :=LoadStringF(index:=15);
+gsm_staid   :=LoadStringF(index:=16);
+gsm_admin   :=LoadStringF(index:=17);
+gsm_alarm   :=LoadStringF(index:=18);
+workingmode :=LoadStringF(index:=19);
+if workingmode="modem" then workingmode:="Modem AWS Campbell"; end_if;
+resolusi    :=LoadStringF(index:=20);
+intervaldata:=LoadStringF(index:=21);
+gsm_observer:=LoadStringF(index:=22);
+resettime   :=LoadStringF(index:=23); 
+if strLen(str:=resettime)=1 then
+   resettime :="0"+resettime+":00:00";
+else
+   resettime :=resettime+":00:00";
+end_if;
+clock();
+rtuclock:=intToStr(v:=clock.year)+"/"+sintToStr(v:=clock.month)+"/"+sintToStr(v:=clock.day)+" ";
+rtuclock:=rtuclock+sintToStr(v:=clock.hour)+":"+sintToStr(v:=clock.minute)+":"+sintToStr(v:=clock.second);
+serSendString(port:=ServicePort, str:="$N");
+serSendString(port:=ServicePort, str:="$N");
+serSendString(port:=ServicePort, str:="_______________________________INFORMASI PERALATAN_______________________________"+"$N");
+serSendString(port:=ServicePort, str:="$N");
+serSendString(port:=ServicePort, str:="JAM,BATERAI,GPS :"+"$N");
+serSendString(port:=ServicePort, str:="  > Working Mode (modem/arg)            : "+workingmode+"$N");
+serSendString(port:=ServicePort, str:="  > Stasiun Id                          : "+ftp_staid+"$N");
+serSendString(port:=ServicePort, str:="  > Device Clock                        : "+rtuclock+"$N");
+serSendString(port:=ServicePort, str:="  > Battery Voltage                     : "+baterai+ " VDC"+"$N");
+serSendString(port:=ServicePort, str:="  > Serial Number                       : "+boardsn+"$N");
+serSendString(port:=ServicePort, str:="  > GPS Status                          : "+gpsmode+"$N");
+serSendString(port:=ServicePort, str:="  > GPS Lattitude                       : "+lat+"$N");
+serSendString(port:=ServicePort, str:="  > GPS Longitude                       : "+lon+"$N");
+serSendString(port:=ServicePort, str:="$N");
+serSendString(port:=ServicePort, str:="GSM :"+"$N");
+serSendString(port:=ServicePort, str:="  > Provider                            : "+provider+"$N");
+serSendString(port:=ServicePort, str:="  > IMEI                                : "+imei+"$N");
+serSendString(port:=ServicePort, str:="  > IMSI                                : "+imsi+"$N");
+serSendString(port:=ServicePort, str:="  > ICCID                               : "+iccid+"$N");
+serSendString(port:=ServicePort, str:="  > Signal Strength (-113 to -51 dBm)   : "+signalstrength+"$N");
+serSendString(port:=ServicePort, str:="  > Network Type                        : "+netgsm+"$N");
+serSendString(port:=ServicePort, str:="$N");
+serSendString(port:=ServicePort, str:="GPRS :"+"$N");
+serSendString(port:=ServicePort, str:="  > APN                                 : "+gprsapn+"$N");
+serSendString(port:=ServicePort, str:="  > User Name                           : "+gprsusername+"$N");
+serSendString(port:=ServicePort, str:="  > Password                            : "+gprspassword+"$N");
+serSendString(port:=ServicePort, str:="  > Status                              : "+gprsstatus+"$N");
+serSendString(port:=ServicePort, str:="  > PPP IP Address                      : "+gprsip+"$N");
+serSendString(port:=ServicePort, str:="$N");
+serSendString(port:=ServicePort, str:="MODEM GATEWAY SERVER :"+"$N");
+serSendString(port:=ServicePort, str:="  > Mode                                : "+gw_mode+"$N");
+serSendString(port:=ServicePort, str:="  > IP Address                          : "+gw_ip+"$N");
+serSendString(port:=ServicePort, str:="  > Port                                : "+gw_port+"$N");
+serSendString(port:=ServicePort, str:="  > Status                              : "+gw_status+"$N");
+serSendString(port:=ServicePort, str:="$N");
+serSendString(port:=ServicePort, str:="FTP SERVER :"+"$N");
+serSendString(port:=ServicePort, str:="  > IP Address                          : "+ftp_ip+"$N");
+serSendString(port:=ServicePort, str:="  > Port                                : "+ftp_port+"$N");
+serSendString(port:=ServicePort, str:="  > Username                            : "+ftp_user+"$N");
+serSendString(port:=ServicePort, str:="  > Password                            : "+ftp_pass+"$N");
+serSendString(port:=ServicePort, str:="$N");
+serSendString(port:=ServicePort, str:="MQTT SERVER:"+"$N");
+serSendString(port:=ServicePort, str:="  > Status                              : "+mqtt_status+"$N");
+serSendString(port:=ServicePort, str:="  > IP Address                          : "+mqtt_ip+"$N");
+serSendString(port:=ServicePort, str:="  > Port                                : "+mqtt_port+"$N");
+serSendString(port:=ServicePort, str:="  > Lokasi                              : "+mqtt_lokasi+"$N");
+//serSendString(port:=ServicePort, str:="  > Stasiun Id                          : "+sock_staid+"$N");
+//serSendString(port:=ServicePort, str:="$N");
+//serSendString(port:=ServicePort, str:="SMS Server:"+"$N");
+//serSendString(port:=ServicePort, str:="  > GSM Number                          : "+gsm_base+"$N");
+//serSendString(port:=ServicePort, str:="  > Stasiun Id                          : "+gsm_staid+"$N");
+serSendString(port:=ServicePort, str:="$N");
+serSendString(port:=ServicePort, str:="GSM NUMBER :"+"$N");
+serSendString(port:=ServicePort, str:="  > Nomor GSM Administrator             : "+gsm_admin+"$N");
+serSendString(port:=ServicePort, str:="  > Nomor GSM Alarm                     : "+gsm_alarm+"$N");
+
+if workingmode="ARG" or workingmode="arg" then
+   serSendString(port:=ServicePort, str:="$N");
+   serSendString(port:=ServicePort, str:="ARG :"+"$N");
+   serSendString(port:=ServicePort, str:="  > Resolusi Sensor Hujan               : "+resolusi+" mm"+"$N");
+   serSendString(port:=ServicePort, str:="  > Interval Pengiriman File            : "+intervaldata+" menit"+"$N");
+   serSendString(port:=ServicePort, str:="  > Nomor GSM Pengamat Hujan Harian     : "+gsm_observer+"$N");
+   serSendString(port:=ServicePort, str:="  > Jumlah Hujan Akumulasi 24 jam       : "+rr+" mm"+"$N");
+end_if;
+serSendString(port:=ServicePort, str:="$N");
+serSendString(port:=ServicePort, str:="___________________________________________________________________________________"+"$N");
+serSendString(port:=ServicePort, str:="$N");
+Sleep(delay:=10000);
+InformasiPerangkat_exit:=true;
+end_function;
+
+Function ParameterWorking;
+var
+   RX_PW: SINT;
+   s:string;
+   nilai:string;
+   ctr,FNum:int;
+   backspacefound:int;
+end_var;
+nilai:="";
+s:="";
+RX_ParameterWorking(port:=ServicePort, enable:=TRUE, frame:=ADDR(RX_PW), maxSize:=SIZEOF(RX_PW), sof:=16#00, eof:=16#0D);
+serSendString(port:=ServicePort, str:="$N");
+serSendString(port:=ServicePort, str:="# WORKING MODE (modem/arg) : [1] Modem AWS Campbell     [2] ARG > ");
+FNum:=19;
+RX_ParameterWorking();
+ctr:=0;
+while not RX_ParameterWorking.ready do
+   RX_ParameterWorking();
+   Sleep(delay:=1000);
+   ctr:=ctr+1;
+   if ctr=60 then 
+      ParameterWorking_exit:=true;
+      exit;
+   end_if;
+end_while;
+         
+if RX_ParameterWorking.ready then
+   s:=strFromMemory(src:=ADDR(RX_PW), len:=SIZEOF(RX_PW));
+   backspacefound:=strFind(str1:=s, str2:="$08");
+   serFrameReceiveDone(port:=ServicePort);
+   serFlush(port:=ServicePort);
+   nilai:=s;
+
+   SaveStringF(index:=Fnum, str:="");
+   if backspacefound=0 then
+      //if tag=1 then
+         if nilai="1" then 
+            nilai:="modem"; 
+            SaveStringF(index:=9,str:="aws");
+            SaveStringF(index:=10,str:="aws");
+         end_if;
+         if nilai="2" then 
+            nilai:="arg"; 
+            SaveStringF(index:=9,str:="arg");
+            SaveStringF(index:=10,str:="arg");
+         end_if;
+         Reboot:=true;
+      end_if;
+      SaveStringF(index:=Fnum, str:=nilai);
+   //end_if;
+   ParameterWorking_exit:=true;
+end_if;
+End_Function;
+
+Function ParameterDasar;
+var_input
+   tag:sint;
+end_var;
+
+var
+   RX_PaD: array[0..19] of SINT;
+   s:string;
+   nilai:string;
+   ctr,FNum:int;
+   backspacefound:int;
+end_var;
+nilai:="";
+s:="";
+RX_ParameterDasar(port:=ServicePort, enable:=TRUE, frame:=ADDR(RX_PaD), maxSize:=SIZEOF(RX_PaD), sof:=16#00, eof:=16#0D);
+serSendString(port:=ServicePort, str:="$N");
+case tag of
+   1: serSendString(port:=ServicePort, str:="# WORKING MODE (modem/arg) : [1] Modem AWS Campbell     [2] ARG > ");
+      FNum:=19; 
+   2: serSendString(port:=ServicePort, str:="# STASIUN ID > ");
+      FNum:=11; 
+   3: serSendString(port:=ServicePort, str:="# LOKASI MQTT > ");
+      FNum:=24;
+   4: serSendString(port:=ServicePort, str:="# NOMOR GSM PENGAMAT HUJAN HARIAN (format:+62812xxxxxxxx) > ");
+      FNum:=22;
+   5: SaveString(index:=57,str:="0.0");
+      serSendString(port:=ServicePort, str:="> ARG REBOOT..."+"$N");
+      boardReset();
+end_case;
+
+RX_ParameterDasar();
+ctr:=0;
+while not RX_ParameterDasar.ready do
+   RX_ParameterDasar();
+   Sleep(delay:=1000);
+   ctr:=ctr+1;
+   if ctr=60 then 
+      ParameterDasar_exit:=true;
+      exit;
+   end_if;
+end_while;
+         
+if RX_ParameterDasar.ready then
+   s:=strFromMemory(src:=ADDR(RX_PaD), len:=SIZEOF(RX_PaD));
+   backspacefound:=strFind(str1:=s, str2:="$08");
+   serFrameReceiveDone(port:=ServicePort);
+   serFlush(port:=ServicePort);
+   nilai:=s;
+
+   SaveStringF(index:=Fnum, str:="");
+   if backspacefound=0 then
+      if tag=1 then
+         if nilai="1" then 
+            nilai:="modem"; 
+            SaveStringF(index:=9,str:="aws");
+            SaveStringF(index:=10,str:="aws");
+         end_if;
+         if nilai="2" then 
+            nilai:="arg"; 
+            SaveStringF(index:=9,str:="arg");
+            SaveStringF(index:=10,str:="arg");
+         end_if;
+         Reboot:=true;
+      end_if;
+      SaveStringF(index:=Fnum, str:=nilai);
+   end_if;
+   ParameterDasar_exit:=true;
+end_if;
+End_Function;
+
+Function ParameterLanjutan;
+var_input
+   tag_sint:sint;
+   tag_str:string;
+end_var;
+
+var
+   RX_PaL: array[0..19] of SINT;
+   s:string;
+   nilai:string;
+   ctr,Fnum:int;
+   backspacefound:int;
+   tag:sint;
+end_var;
+nilai:="";
+s:="";
+RX_ParameterLanjutan(port:=ServicePort, enable:=TRUE, frame:=ADDR(RX_PaL), maxSize:=SIZEOF(RX_PaL), sof:=16#00, eof:=16#0D);
+serSendString(port:=ServicePort, str:="$N");
+
+if tag_sint=1 then tag:=1; end_if;
+if tag_sint=2 then tag:=2; end_if;
+if tag_sint=3 then tag:=3; end_if;
+if tag_sint=4 then tag:=4; end_if;
+if tag_sint=5 then tag:=5; end_if;
+if tag_sint=6 then tag:=6; end_if;
+if tag_sint=7 then tag:=7; end_if;
+if tag_sint=8 then tag:=8; end_if;
+if tag_sint=9 then tag:=9; end_if;
+
+if tag_str="a" or tag_str="A" then tag:=10; end_if;
+if tag_str="b" or tag_str="B" then tag:=11; end_if;
+if tag_str="c" or tag_str="C" then tag:=12; end_if;
+if tag_str="d" or tag_str="D" then tag:=13; end_if;
+if tag_str="e" or tag_str="E" then tag:=14; end_if;
+if tag_str="f" or tag_str="F" then tag:=15; end_if;
+if tag_str="g" or tag_str="G" then tag:=16; end_if;
+if tag_str="h" or tag_str="H" then tag:=17; end_if;
+
+case tag of
+   1: serSendString(port:=ServicePort, str:="# SET GPRS - APN > ");
+      FNum:=1;
+   2: serSendString(port:=ServicePort, str:="# SET GPRS - User Name > ");
+      FNum:=2;
+   3: serSendString(port:=ServicePort, str:="# SET GPRS - Password > ");
+      FNum:=3;
+   4: serSendString(port:=ServicePort, str:="# SET MODEM GATEWAY - ENABLED (y/n) > ");
+      FNum:=4;
+   5: serSendString(port:=ServicePort, str:="# SET MODEM GATEWAY - IP ADDRESS/DOMAIN > ");
+      FNum:=5;
+   6: serSendString(port:=ServicePort, str:="# SET MODEM GATEWAY - PORT > ");
+      FNum:=6;
+   7: serSendString(port:=ServicePort, str:="# SET FTP SERVER - IP ADDRESS/DOMAIN > ");
+      FNum:=7;
+   8: serSendString(port:=ServicePort, str:="# SET FTP SERVER - PORT > ");
+      FNum:=8;
+   9: serSendString(port:=ServicePort, str:="# SET FTP SERVER - USERNAME > ");
+      FNum:=9;
+   10: serSendString(port:=ServicePort, str:="# SET FTP SERVER - PASSWORD > ");
+      FNum:=10;
+   11: serSendString(port:=ServicePort, str:="# SET MWTT SERVER - ENABLED (y/n) > ");
+      FNum:=12;
+   12: serSendString(port:=ServicePort, str:="# SET MQTT SERVER - IP ADDRESS/DOMAIN > ");
+      FNum:=13;
+   13: serSendString(port:=ServicePort, str:="# SET MQTT SERVER - PORT > ");
+      FNum:=14;
+   14: serSendString(port:=ServicePort, str:="# SET NOMOR GSM ADMINISTRATOR (format:+62812xxxxxxxx) > ");
+      FNum:=17;
+   15: serSendString(port:=ServicePort, str:="# SET NOMOR GSM ALARM (format:+62812xxxxxxxx) > ");
+      FNum:=18;
+   16: serSendString(port:=ServicePort, str:="# SET RESOLUSI SENSOR HUJAN (mm) > ");
+      FNum:=20;
+   17: serSendString(port:=ServicePort, str:="# SET INTERVAL PENGIRIMAN FILE (menit) > ");
+      FNum:=21;
+end_case;
+
+RX_ParameterLanjutan();
+ctr:=0;
+while not RX_ParameterLanjutan.ready do
+   RX_ParameterLanjutan();
+   Sleep(delay:=1000);
+   ctr:=ctr+1;
+   if ctr=60 then 
+      ParameterLanjutan_exit:=true;
+      exit;
+   end_if;
+end_while;
+         
+if RX_ParameterLanjutan.ready then
+   s:=strFromMemory(src:=ADDR(RX_PaL), len:=SIZEOF(RX_PaL));
+   backspacefound:=strFind(str1:=s, str2:="$08");
+   serFrameReceiveDone(port:=ServicePort);
+   serFlush(port:=ServicePort);
+   nilai:=s;
+
+   SaveStringF(index:=FNum, str:="");
+   if backspacefound=0 then
+      SaveStringF(index:=FNum, str:=nilai);
+      if tag=1 or tag=2 or tag=3 or tag=4 or tag=5 or tag=6 then
+         Reboot:=true;
+      end_if;
+   end_if;
+   ParameterLanjutan_exit:=true;
+end_if;
+End_Function;
+
+Function ParameterApn;
+var_input
+   tag_sint:sint;
+end_var;
+
+var
+   RX_PaA: array[0..19] of SINT;
+   s:string;
+   nilai:string;
+   ctr,Fnum:int;
+   backspacefound:int;
+   tag:sint;
+end_var;
+nilai:="";
+s:="";
+RX_ParameterApn(port:=ServicePort, enable:=TRUE, frame:=ADDR(RX_PaA), maxSize:=SIZEOF(RX_PaA), sof:=16#00, eof:=16#0D);
+serSendString(port:=ServicePort, str:="$N");
+
+if tag_sint=1 then tag:=1; end_if;
+if tag_sint=2 then tag:=2; end_if;
+if tag_sint=3 then tag:=3; end_if;
+
+case tag of
+   1: serSendString(port:=ServicePort, str:="# SET GPRS - APN > ");
+      FNum:=1;
+   2: serSendString(port:=ServicePort, str:="# SET GPRS - User Name > ");
+      FNum:=2;
+   3: serSendString(port:=ServicePort, str:="# SET GPRS - Password > ");
+      FNum:=3;
+end_case;
+
+RX_ParameterApn();
+ctr:=0;
+while not RX_ParameterApn.ready do
+   RX_ParameterApn();
+   Sleep(delay:=1000);
+   ctr:=ctr+1;
+   if ctr=60 then 
+      ParameterApn_exit:=true;
+      exit;
+   end_if;
+end_while;
+         
+if RX_ParameterApn.ready then
+   s:=strFromMemory(src:=ADDR(RX_PaA), len:=SIZEOF(RX_PaA));
+   backspacefound:=strFind(str1:=s, str2:="$08");
+   serFrameReceiveDone(port:=ServicePort);
+   serFlush(port:=ServicePort);
+   nilai:=s;
+
+   SaveStringF(index:=FNum, str:="");
+   if backspacefound=0 then
+      SaveStringF(index:=FNum, str:=nilai);
+      if tag=1 or tag=2 or tag=3 then
+         Reboot:=true;
+      end_if;
+   end_if;
+   ParameterApn_exit:=true;
+end_if;
+End_Function;
+
+Function PengaturanDasar;
+var
+   RX_PD:SINT;
+   workingmode,ftp_staid,gsm_observer,mqtt_lokasi:string;
+   s:string;
+   ctr:int;
+end_var;
+RX_PengaturanDasar(port:=ServicePort, enable:=TRUE, frame:=ADDR(RX_PD), maxSize:=SIZEOF(RX_PD), sof:=16#00, eof:=16#0D);
+
+ftp_staid   :=LoadStringF(index:=11);
+workingmode :=LoadStringF(index:=19);
+mqtt_lokasi :=LoadStringF(index:=24);
+if workingmode="modem" then workingmode:="Modem AWS Campbell"; end_if;
+gsm_observer:=LoadStringF(index:=22);
+
+serSendString(port:=ServicePort, str:="$N");
+serSendString(port:=ServicePort, str:="$N");
+serSendString(port:=ServicePort, str:="______________________________PENGATURAN DASAR______________________________"+"$N");
+serSendString(port:=ServicePort, str:="$N");
+serSendString(port:=ServicePort, str:="[1] SET WORKING MODE (modem/arg)        : "+workingmode+"$N");
+serSendString(port:=ServicePort, str:="[2] SET STASIUN ID                      : "+ftp_staid+"$N");
+serSendString(port:=ServicePort, str:="[3] SET LOKASI MQTT                     : "+mqtt_lokasi+"$N");
+if workingmode="ARG" or workingmode="arg" then
+   serSendString(port:=ServicePort, str:="[4] SET NOMOR GSM PENGAMAT HUJAN HARIAN : "+gsm_observer+"$N");
+   serSendString(port:=ServicePort, str:="[5] SET JUMLAH HUJAN AKUMULASI 24 JAM ke 0.0 mm "+"$N");
+end_if;
+serSendString(port:=ServicePort, str:="[x] KELUAR"+"$N");
+serSendString(port:=ServicePort, str:="> ");
+
+RX_PengaturanDasar();
+ctr:=0;
+while not RX_PengaturanDasar.ready do
+   RX_PengaturanDasar();
+   Sleep(delay:=1000);
+   ctr:=ctr+1;
+   if ctr=60 then 
+      PengaturanDasar_exit:=true;
+      exit;
+   end_if;
+end_while;
+         
+if RX_PengaturanDasar.ready then
+   s:=strFromMemory(src:=ADDR(RX_PD), len:=SIZEOF(RX_PD));
+   serFrameReceiveDone(port:=ServicePort);
+   serFlush(port:=ServicePort);
+   
+   if s="1" then 
+      ParameterWorking(); 
+      PengaturanDasar_exit:=false;
+   end_If;
+   
+   if s="2" or s="3" or s="4" then 
+      ParameterDasar(tag:=strToSint(str:=s)); 
+      PengaturanDasar_exit:=false;
+   end_If;
+   
+   if s="5" then 
+      SaveString(index:=57,str:="0.0");
+      rain_24h.ld := TRUE;
+      rain_24h.ncv := 0;
+      rain_24h();
+      rain_24h.ld := FALSE;
+      rain_24h();
+      UPDATEIO();
+      serSendString(port:=ServicePort, str:="HUJAN AKUMULASI 24 JAM SUDAH di SET ke 0.0 mm "+"$N");
+      PengaturanDasar_exit:=false;     
+   end_If;
+
+   if s="x" or s="X" then 
+      if Reboot then
+         serSendString(port:=ServicePort, str:="$N");
+         serSendString(port:=ServicePort, str:="MODEM REBOOT..."+"$N");
+         boardReset();
+      else
+         PengaturanDasar_exit:=true;
+      end_if;
+   end_if;
+end_if;
+End_function;
+
+Function PengaturanLanjutan;
+var
+   RX_PL:SINT;
+   gprsapn,gprsusername,gprspassword,gprsstatus,gprsip:string;
+   gw_mode,gw_ip,gw_port,gw_status:string;
+   ftp_ip,ftp_port,ftp_user,ftp_pass,ftp_staid:string;
+   mqtt_status,mqtt_ip,mqtt_port:string;
+   gsm_base,gsm_staid,gsm_admin,gsm_observer,gsm_alarm:string;
+   workingmode:string;
+   resolusi,intervaldata,resettime:string;
+   s:string;
+   ctr:int;
+end_var;
+RX_PengaturanLanjutan(port:=ServicePort, enable:=TRUE, frame:=ADDR(RX_PL), maxSize:=SIZEOF(RX_PL), sof:=16#00, eof:=16#0D);
+
+
+//data input di FRAM
+gprsapn     :=LoadStringF(index:=1);
+gprsusername:=LoadStringF(index:=2);
+gprspassword:=LoadStringF(index:=3);
+gw_mode     :=LoadStringF(index:=4);
+if gw_mode="y" or gw_mode="Y" then
+   gw_mode:="Enabled";
+else
+   gw_mode:="Disabled";
+end_if;
+gw_ip       :=LoadStringF(index:=5);
+gw_port     :=LoadStringF(index:=6);
+ftp_ip      :=LoadStringF(index:=7);
+ftp_port    :=LoadStringF(index:=8);
+ftp_user    :=LoadStringF(index:=9);
+ftp_pass    :=LoadStringF(index:=10);
+//ftp_staid   :=LoadStringF(index:=11);
+mqtt_status :=LoadStringF(index:=12);
+if mqtt_status="y" or mqtt_status="Y" then
+   mqtt_status:="Enabled";
+else
+   mqtt_status:="Disabled";
+end_if;
+mqtt_ip     :=LoadStringF(index:=13);
+mqtt_port   :=LoadStringF(index:=14);
+
+//gsm_base    :=LoadStringF(index:=15);
+//gsm_staid   :=LoadStringF(index:=16);
+gsm_admin   :=LoadStringF(index:=17);
+gsm_alarm   :=LoadStringF(index:=18);
+workingmode :=LoadStringF(index:=19);
+//if workingmode="modem" then workingmode:="Modem AWS Campbell"; end_if;
+resolusi    :=LoadStringF(index:=20);
+intervaldata:=LoadStringF(index:=21);
+//gsm_observer:=LoadStringF(index:=22);
+resettime   :=LoadStringF(index:=23);
+
+serSendString(port:=ServicePort, str:="$N");
+serSendString(port:=ServicePort, str:="$N");
+serSendString(port:=ServicePort, str:="_________________________________PENGATURAN LANJUTAN_________________________________"+"$N");
+serSendString(port:=ServicePort, str:="$N");
+serSendString(port:=ServicePort, str:="[1] GPRS          - APN                : "+gprsapn+"$N");
+serSendString(port:=ServicePort, str:="[2] GPRS          - USERNAME           : "+gprsusername+"$N");
+serSendString(port:=ServicePort, str:="[3] GPRS          - PASSWORD           : "+gprspassword+"$N");
+serSendString(port:=ServicePort, str:="[4] MODEM GATEWAY - ENABLED (y/n)      : "+gw_mode+"$N");
+serSendString(port:=ServicePort, str:="[5] MODEM GATEWAY - IP ADDRESS/DOMAIN  : "+gw_ip+"$N");
+serSendString(port:=ServicePort, str:="[6] MODEM GATEWAY - PORT               : "+gw_port+"$N");
+serSendString(port:=ServicePort, str:="[7] FTP SERVER    - IP ADDRESS/DOMAIN  : "+ftp_ip+"$N");
+serSendString(port:=ServicePort, str:="[8] FTP SERVER    - PORT               : "+ftp_port+"$N");
+serSendString(port:=ServicePort, str:="[9] FTP SERVER    - USERNAME           : "+ftp_user+"$N");
+serSendString(port:=ServicePort, str:="[a] FTP SERVER    - PASSWORD           : "+ftp_pass+"$N");
+serSendString(port:=ServicePort, str:="[b] MQTT SERVER   - ENABLED (y/n)      : "+mqtt_status+"$N");
+serSendString(port:=ServicePort, str:="[c] MQTT SERVER   - IP ADDRESS/DOMAIN  : "+mqtt_ip+"$N");
+serSendString(port:=ServicePort, str:="[d] MQTT SERVER   - PORT               : "+mqtt_port+"$N");
+//serSendString(port:=ServicePort, str:="[e] Set Socket Server Stasiun Id           : "+sock_staid+"$N");
+//serSendString(port:=ServicePort, str:="[f] Set SMS Server GSM Number              : "+gsm_base+"$N");
+//serSendString(port:=ServicePort, str:="[g] Set SMS Server Stasiun Id              : "+gsm_staid+"$N");
+serSendString(port:=ServicePort, str:="[e] NOMOR GSM ADMINISTATOR             : "+gsm_admin+"$N");
+serSendString(port:=ServicePort, str:="[f] NOMOR GSM ALARM                    : "+gsm_alarm+"$N");
+if workingmode="ARG" or workingmode="arg" then
+   serSendString(port:=ServicePort, str:="[g] RESOLUSI SENSOR HUJAN (mm)         : "+resolusi+"$N");
+   serSendString(port:=ServicePort, str:="[h] INTERVAL PENGIRIMAN FILE (menit)   : "+intervaldata+"$N");
+end_if;
+serSendString(port:=ServicePort, str:="[x] KELUAR"+"$N");
+serSendString(port:=ServicePort, str:="> ");
+
+RX_PengaturanLanjutan();
+ctr:=0;
+while not RX_PengaturanLanjutan.ready do
+   RX_PengaturanLanjutan();
+   Sleep(delay:=1000);
+   ctr:=ctr+1;
+   if ctr=60 then 
+      PengaturanLanjutan_exit:=true;
+      exit;
+   end_if;
+end_while;
+         
+if RX_PengaturanLanjutan.ready then
+   s:=strFromMemory(src:=ADDR(RX_PL), len:=SIZEOF(RX_PL));
+   serFrameReceiveDone(port:=ServicePort);
+   serFlush(port:=ServicePort);
+   if s="1" or s="2" or s="3" or s="4" or s="5" or
+      s="6" or s="7" or s="8" or s="9" then ParameterLanjutan(tag_sint:=strToSint(str:=s)); end_If;
+   if s="a" or s="A" or s="b" or s="B" or s="c" or s="C" or
+      s="d" or s="D" or s="e" or s="E" or s="f" or s="F" or 
+      s="g" or s="G" or s="h" or s="H" then ParameterLanjutan(tag_str:=s); end_if;
+   PengaturanLanjutan_exit:=false;
+
+   if s="x" or s="X" then 
+      if Reboot then
+         serSendString(port:=ServicePort, str:="$N");
+         serSendString(port:=ServicePort, str:="MODEM REBOOT..."+"$N");
+         boardReset();
+      else
+         PengaturanLanjutan_exit:=true;
+      end_if;
+   end_if;
+end_if;
+End_function;
+
+Function PengaturanApn;
+var
+   RX_PA:SINT;
+   gprsapn,gprsusername,gprspassword:string; 
+   s:string;
+   ctr:int;
+end_var;
+RX_PengaturanApn(port:=ServicePort, enable:=TRUE, frame:=ADDR(RX_PA), maxSize:=SIZEOF(RX_PA), sof:=16#00, eof:=16#0D);
+
+
+//data input di FRAM
+gprsapn     :=LoadStringF(index:=1);
+gprsusername:=LoadStringF(index:=2);
+gprspassword:=LoadStringF(index:=3);
+
+serSendString(port:=ServicePort, str:="$N");
+serSendString(port:=ServicePort, str:="$N");
+serSendString(port:=ServicePort, str:="_________________________________APN SETTING_________________________________"+"$N");
+serSendString(port:=ServicePort, str:="$N");
+serSendString(port:=ServicePort, str:="[1] GPRS          - APN                : "+gprsapn+"$N");
+serSendString(port:=ServicePort, str:="[2] GPRS          - USERNAME           : "+gprsusername+"$N");
+serSendString(port:=ServicePort, str:="[3] GPRS          - PASSWORD           : "+gprspassword+"$N");
+serSendString(port:=ServicePort, str:="[x] KELUAR"+"$N");
+serSendString(port:=ServicePort, str:="> ");
+
+RX_PengaturanApn();
+ctr:=0;
+while not RX_PengaturanApn.ready do
+   RX_PengaturanApn();
+   Sleep(delay:=1000);
+   ctr:=ctr+1;
+   if ctr=60 then 
+      PengaturanApn_exit:=true;
+      exit;
+   end_if;
+end_while;
+         
+if RX_PengaturanApn.ready then
+   s:=strFromMemory(src:=ADDR(RX_PA), len:=SIZEOF(RX_PA));
+   serFrameReceiveDone(port:=ServicePort);
+   serFlush(port:=ServicePort);
+   if s="1" or s="2" or s="3" then ParameterApn(tag_sint:=strToSint(str:=s)); end_If;
+   
+   PengaturanApn_exit:=false;
+
+   if s="x" or s="X" then 
+      if Reboot then
+         serSendString(port:=ServicePort, str:="$N");
+         serSendString(port:=ServicePort, str:="MODEM REBOOT..."+"$N");
+         boardReset();
+      else
+         PengaturanApn_exit:=true;
+      end_if;
+   end_if;
+end_if;
+End_function;
+
+Function Ftp_AwsCenter;
+var
+   yy,mm,dd,hh,nn,ss,bt:string;
+   str_date,str_time:string;
+   rr,ws,ws_max,wd,tt_max,tt,tt_min,rh,pp,slr,slr_max,nr,wl,tt_sea:string;
+   float_rr,float_ws,float_ws_max,float_wd,float_tt_max,float_tt,float_tt_min:float;
+   float_rh,float_pp,float_slr,float_slr_max,float_bt:float;
+   str_rr,str_ws,str_ws_max,str_wd,str_tt_min,str_tt,str_tt_max:string;
+   str_rh,str_pp,str_slr,str_slr_max,str_nr,str_wl,str_tt_sea,str_bt:string;
+   dint_date,dint_time:dint;
+   dint_rr,dint_ws,dint_ws_max,dint_wd,dint_tt_max,dint_tt,dint_tt_min:dint;
+   dint_rh,dint_pp,dint_slr,dint_slr_max,dint_bt:dint;
+   ftp_ip,ftp_port,ftp_user,ftp_password:string;
+   staid:string;
+   workingmode,Data,Data_mapping:string;
+   fd1:FILE;
+   namefile:string;
+   open:int;
+   idFTP,ftp_send: INT;
+   timetolinsec:Dint;
+
+end_var;
+ftp_ip      :=LoadStringF(index:=7);
+ftp_port    :=LoadStringF(index:=8);
+ftp_user    :=LoadStringF(index:=9);
+ftp_password:=LoadStringF(index:=10);
+staid       :=LoadStringF(index:=11);
+workingmode :=LoadStringF(index:=19);
+
+bt          :=LoadString(index:=7);
+yy          :=LoadString(index:=51);
+mm          :=LoadString(index:=52);
+dd          :=LoadString(index:=53);
+hh          :=LoadString(index:=54);
+nn          :=LoadString(index:=55);
+ss          :=LoadString(index:=56);
+rr          :=LoadString(index:=57);
+ws          :=LoadString(index:=58);
+ws_max      :=LoadString(index:=59);
+wd          :=LoadString(index:=60);
+tt_max      :=LoadString(index:=61);
+tt          :=LoadString(index:=62);
+tt_min      :=LoadString(index:=63);
+rh          :=LoadString(index:=64);
+pp          :=LoadString(index:=65);
+slr         :=LoadString(index:=66);
+slr_max     :=LoadString(index:=67);
+
+//data file untuk aws center
+if workingmode="modem" or workingmode="MODEM" then
+Data:=dd+"/"+mm+"/"+yy+","+hh+":"+nn+":"+"00"+",";
+Data:=Data+rr+","+ws+","+ws_max+","+wd+","+tt_max+","+tt+","+tt_min+","+rh+","+pp+",";
+Data:=Data+slr+","+slr_max+","+bt;
+Data_mapping:="timestamps:"+dd+"/"+mm+"/"+yy+" "+hh+":"+nn+":"+"00"+",";
+Data_mapping:=Data_mapping+"RR:"+rr+","+"WS:"+ws+","+"WS_Max:"+ws_max+","+"WD:"+wd+",";
+Data_mapping:=Data_mapping+"TT_Max:"+tt_max+","+"TT:"+tt+","+"TT_Min:"+tt_min+","+"RH:"+rh+",";
+Data_mapping:=Data_mapping+"PP:"+pp+","+"SLR:"+slr+","+"SLR_Max:"+slr_max+","+"Baterai:"+bt;
+end_if;
+
+if workingmode="arg" or workingmode="ARG" then
+Data:=dd+"/"+mm+"/"+yy+","+hh+":"+nn+":"+"00"+","+rr+","+bt;
+Data_mapping:="timestamps:"+dd+"/"+mm+"/"+yy+" "+hh+":"+nn+":"+"00"+",";
+Data_mapping:=Data_mapping+"RR:"+rr+","+"Baterai:"+bt;
+end_if;
+DebugMsg(message:="Data:"+Data);
+
+if Debug_bool then serSendString(port:=ServicePort, str:="! Data Mapping : "+Data_mapping + "$N"); end_if;
+
+fd1 := fsFileCreate(name := logfile1);
+fsFileWriteString(fd := fd1, str :=Data);
+fsFileClose(fd := fd1);
+namefile:=staid+yy+mm+dd+hh+nn+".txt";
+open:=ftpOpen();
+ftp_open_id:=open; 
+If open=0 Then
+   idFTP := ftpConnect(host := ftp_ip, port:=strToDint(str:=ftp_port), username := ftp_user, password := ftp_password);
+   ftp_connect_id:=idFTP;
+   DebugMsg(message:="idFTP:"+intToStr(v:=idFTP));
+   if idFTP > 0 then 
+      ftp_send:=ftpFileSend(id := idFTP, name :=namefile, local :=logfile1);
+      ftp_filesend_id:=ftp_send;
+      if ftp_send = 0 then
+         DebugMsg(message:= "FTP file to AWS Center:"+ftp_ip+ ":SUCCESS");
+         DebugMsg(message:= "File Name:" + namefile);
+         bufferbool:=true;
+       else
+         DebugMsg(message:= "FTP file to AWS Center Failed, Error msg ftpFileSend: "+intToStr(v:=ftp_send)); 
+         DebugMsg(message:= "File Name:" + namefile);
+         bufferbool:=false;
+      end_if;
+   else
+      DebugMsg(message:= "FTP file to AWS Center Failed, Error msg ftpConnect:"+intToStr(v:=idFTP));
+      DebugMsg(message:= "File Name:" + namefile);
+      bufferbool:=false;
+   end_if; 
+   ftpDisconnect(id := idFTP);
+else
+   DebugMsg(message:="FTP file to AWS Center Failed, Error msg ftpOpen:"+ intToStr(v:=open));
+   DebugMsg(message:= "File Name:" + namefile);
+   bufferbool:=false;
+End_If;
+fsFileDelete(name :=logfile1);
+ftpClose();
+if not TestMode then
+   if Debug_bool then
+   If open=0 Then
+      if idFTP > 0 then
+         if ftp_send=0 then 
+            serSendString(port:=ServicePort, str:="! Pengiriman file :"+ namefile+", ke FTP Server "+ftp_ip+": Berhasil"+ "$N"); 
+            else 
+            serSendString(port:=ServicePort, str:="! Pengiriman file :"+ namefile+", ke FTP Server "+ftp_ip+": Gagal"+ "$N");
+         end_if;
+      else
+      serSendString(port:=ServicePort, str:="! Pengiriman file :"+ namefile+", ke FTP Server "+ftp_ip+": Gagal"+ "$N");
+      end_if;
+   else
+   serSendString(port:=ServicePort, str:="! Pengiriman file :"+ namefile+", ke FTP Server "+ftp_ip+": Gagal"+ "$N");
+   end_if;
+   end_if;
+   
+   if not bufferbool then
+      if workingmode="modem" or workingmode="MODEM" then
+         DebugMsg(message:="Save Data FTP To Buffer");
+         //timetolinsec:=clockTimeToLinsec(year := strToInt(str:=yy), month := strToSint(str:=mm), day := strToSint(str:=dd), hour:=strToSint(str:=hh), minute:=strToSint(str:=nn), second:=strToSint(str:=ss));
+         str_date:=yy+mm+dd;
+         str_time:=hh+nn+ss;
+         dint_date:=strToDint(str:=str_date);
+         dint_time:=strToDint(str:=str_time);
+
+         float_rr:= strToFloat(str:=rr)* 10.0;
+         str_rr:=floatToStr(v:=float_rr);
+         dint_rr:=strToDint(str:=str_rr);
+  
+         float_ws:= strToFloat(str:=ws)* 10.0;
+         str_ws:=floatToStr(v:=float_ws);
+         dint_ws:=strToDint(str:=str_ws);
+  
+         float_ws_max:= strToFloat(str:=ws_max)* 10.0;
+         str_ws_max:=floatToStr(v:=float_ws_max);
+         dint_ws_max:=strToDint(str:=str_ws_max);
+  
+         float_wd:= strToFloat(str:=wd)* 10.0;
+         str_wd:=floatToStr(v:=float_wd);
+         dint_wd:=strToDint(str:=str_wd);
+  
+         float_tt_max:= strToFloat(str:=tt_max)* 10.0;
+         str_tt_max:=floatToStr(v:=float_tt_max);
+         dint_tt_max:=strToDint(str:=str_tt_max);
+  
+         float_tt:= strToFloat(str:=tt)* 10.0;
+         str_tt:=floatToStr(v:=float_tt);
+         dint_tt:=strToDint(str:=str_tt);
+  
+         float_tt_min:= strToFloat(str:=tt_min)* 10.0;
+         str_tt_min:=floatToStr(v:=float_tt_min);
+         dint_tt_min:=strToDint(str:=str_tt_min);
+  
+         float_rh:= strToFloat(str:=rh)* 10.0;
+         str_rh:=floatToStr(v:=float_rh);
+         dint_rh:=strToDint(str:=str_rh);
+  
+         float_pp:= strToFloat(str:=pp)* 10.0;
+         str_pp:=floatToStr(v:=float_pp);
+         dint_pp:=strToDint(str:=str_pp);
+  
+         float_slr:= strToFloat(str:=slr)* 10.0;
+         str_slr:=floatToStr(v:=float_slr);
+         dint_slr:=strToDint(str:=str_slr);
+  
+         float_slr_max:= strToFloat(str:=slr_max)* 10.0;
+         str_slr_max:=floatToStr(v:=float_slr_max);
+         dint_slr_max:=strToDint(str:=str_slr_max);
+  
+         float_bt:= strToFloat(str:=bt)* 10.0;
+         str_bt:=floatToStr(v:=float_bt);
+         dint_bt:=strToDint(str:=str_bt);
+  
+         logwriter(tag:=1, value[1]:=dint_date, value[2]:=dint_time, value[3]:=dint_rr, value[4]:=dint_ws, value[5]:=dint_ws_max, value[6]:=dint_wd, value[7]:=dint_tt_max, value[8]:=dint_tt);
+         logwriter(tag:=2, value[1]:=dint_tt_min, value[2]:=dint_rh, value[3]:=dint_pp, value[4]:=dint_slr, value[5]:=dint_slr_max, value[6]:=dint_bt,value[7]:=0,value[8]:=0);
+      end_if;
+
+      if workingmode="arg" or workingmode="ARG" then
+         float_rr:= strToFloat(str:=rr)* 10.0;
+         str_rr:=floatToStr(v:=float_rr);
+         dint_rr:=strToDint(str:=str_rr);
+         float_bt:= strToFloat(str:=bt)* 10.0;
+         str_bt:=floatToStr(v:=float_bt);
+         dint_bt:=strToDint(str:=str_bt);
+         logwriter(tag:=1, value[1]:=dint_rr, value[2]:=dint_bt);
+      end_if;
+      if Debug_bool then serSendString(port:=ServicePort, str:="! Save Data ke Buffer "+ "$N");end_if;
+   end_if;
+end_if;
+
+end_function;
+
+Function TestFTP;
+var
+   RX_TS:Sint;
+   open_id,connect_id,filesend_id,ctr:int;
+   gprsip,ftpip:string;
+   s:string;
+end_var;
+gprsip:=LoadString(index:=19);
+ftpip:=LoadStringF(index:=7);
+serSendString(port:=ServicePort, str:="$N");
+if gprsip<>"0.0.0.0" then
+
+RX_TestFTP(port:=ServicePort, enable:=TRUE, frame:=ADDR(RX_TS), maxSize:=SIZEOF(RX_TS), sof:=16#00, eof:=16#0D);
+serSendString(port:=ServicePort, str:="$N");
+serSendString(port:=ServicePort, str:="__________________TES FTP__________________"+"$N");
+serSendString(port:=ServicePort, str:="> GPRS IP ADDRESS    : "+gprsip+"$N");
+serSendString(port:=ServicePort, str:="> FTP SERVER IP ADD. : "+ftpip+"$N");
+TestMode:=true;
+Ftp_AWSCenter();
+open_id:=ftp_open_id;
+connect_id:=ftp_connect_id;
+filesend_id:=ftp_filesend_id;
+TestMode:=false;
+
+if open_id=0 then 
+   serSendString(port:=ServicePort, str:="> FTP OPEN INTERFACE : Success "+"$N");
+   if connect_id > 0 then 
+      serSendString(port:=ServicePort, str:="> FTP CONNECTION     : Established "+"$N"); 
+      if filesend_id = 0 then serSendString(port:=ServicePort, str:="> FTP FILE SEND      : Success "+"$N");  end_if;
+      if filesend_id = -1 then serSendString(port:=ServicePort, str:="> ERROR FTP FILESEND : Failed to send "+"$N");  end_if;
+      if filesend_id = -2 then serSendString(port:=ServicePort, str:="> ERROR FTP FILESEND : Invalid ID "+"$N");  end_if;
+      if filesend_id = -3 then serSendString(port:=ServicePort, str:="> ERROR FTP FILESEND : Invalid name, or it could not be used to generate a local name "+"$N");  end_if;
+      if filesend_id = -4 then serSendString(port:=ServicePort, str:="> ERROR FTP FILESEND : Session is busy with another operation "+"$N");  end_if;
+      if filesend_id = -5 then serSendString(port:=ServicePort, str:="> ERROR FTP FILESEND : FTP not open, use ftpOpen to open interface "+"$N");  end_if;
+      if filesend_id = -10 then serSendString(port:=ServicePort, str:="> ERROR FTP FILESEND : Communication with server not possible "+"$N");  end_if;
+   end_if;
+   if connect_id = -1 then serSendString(port:=ServicePort, str:="> ERROR FTP CONNECTION : All session is in use "+"$N"); end_if;
+   if connect_id = -3 then serSendString(port:=ServicePort, str:="> ERROR FTP CONNECTION : Error in parameter "+"$N"); end_if;
+   if connect_id = -5 then serSendString(port:=ServicePort, str:="> ERROR FTP CONNECTION : FTP Not Open "+"$N"); end_if;
+   if connect_id = -8 then serSendString(port:=ServicePort, str:="> ERROR FTP CONNECTION : Connection to server failed (IP Address/Port Closed) "+"$N"); end_if;
+   if connect_id = -9 then serSendString(port:=ServicePort, str:="> ERROR FTP CONNECTION : Login failed "+"$N"); end_if;
+   if connect_id = -10 then serSendString(port:=ServicePort, str:="> ERROR FTP CONNECTION : Communication with server not possible "+"$N"); end_if;
+      
+   else
+   serSendString(port:=ServicePort, str:="> ERROR FTP OPEN: FTP Not Supported on Device "+"$N");   
+end_if;
+   
+serSendString(port:=ServicePort, str:="___________________________________________"+"$N");
+serSendString(port:=ServicePort, str:="$N");
+else
+   serSendString(port:=ServicePort, str:="$N");
+   serSendString(port:=ServicePort, str:="__________________TES FTP__________________"+"$N");
+   serSendString(port:=ServicePort, str:="> GPRS IP ADDRESS    : "+"0.0.0.0"+"$N");
+   serSendString(port:=ServicePort, str:="> FTP PROSESS        : "+"STOP"+"$N");
+   serSendString(port:=ServicePort, str:="___________________________________________"+"$N");
+   serSendString(port:=ServicePort, str:="$N");
+end_if;
+TestFTP_exit:=true;
+
+End_Function;
+
+Function MainMenu;
+var
+   RX_MM       : SINT;
+   s:string;
+   ctr:int;
+end_var;
+Debug_bool:=false;
+RX_MainMenu(port:=ServicePort, enable:=TRUE, frame:=ADDR(RX_MM), maxSize:=SIZEOF(RX_MM), sof:=16#00, eof:=16#0D);
+serSendString(port:=ServicePort, str:="$N");
+serSendString(port:=ServicePort, str:="_____INFORMASI & PENGATURAN PERANGKAT_____ " + "$N");
+serSendString(port:=ServicePort, str:="$N");
+serSendString(port:=ServicePort, str:="[1] INFORMASI PERANGKAT" + "$N");
+serSendString(port:=ServicePort, str:="[2] PENGATURAN DASAR " + "$N");
+serSendString(port:=ServicePort, str:="[3] PENGATURAN LANJUTAN " + "$N");
+serSendString(port:=ServicePort, str:="[4] TES PENGIRIMAN FILE KE FTP AWS CENTER" + "$N");
+serSendString(port:=ServicePort, str:="[5] LIHAT DEBUG MESSAGE" + "$N");
+serSendString(port:=ServicePort, str:="[6] REBOOT" + "$N");
+serSendString(port:=ServicePort, str:="[x] KELUAR" + "$N");
+serSendString(port:=ServicePort, str:="> ");
+RX_MainMenu();
+ctr:=0;
+while not RX_MainMenu.ready do
+   RX_MainMenu();
+   Sleep(delay:=1000);
+   ctr:=ctr+1;
+   if ctr=60 then 
+      MainMenu_exit:=true;
+      exit;
+   end_if;
+end_while;
+IF RX_MainMenu.ready THEN
+      s:=strFromMemory(src:=ADDR(RX_MM), len:=SIZEOF(RX_MM));
+      serFrameReceiveDone(port:=ServicePort);
+      serFlush(port:=ServicePort);
+      if s="1" then
+         InformasiPerangkat(); 
+         while not InformasiPerangkat_exit do
+            InformasiPerangkat();
+         end_while;
+         MainMenu_exit:=false;
+      end_if;
+      
+      if s="2" then
+         PengaturanDasar();
+         while not PengaturanDasar_exit do
+            PengaturanDasar();      
+         end_while;
+         MainMenu_exit:=false;
+      end_if;
+      
+      if s="3" then
+         PengaturanLanjutan();
+         while not PengaturanLanjutan_exit do
+            PengaturanLanjutan();      
+         end_while;
+         MainMenu_exit:=false;
+      end_if;
+      
+      if s="4" then
+         TestFTP();
+         while not TestFTP_exit do
+            TestFTP();      
+         end_while;
+         MainMenu_exit:=false;
+      end_if;
+      
+      if s="5" then
+         Debug_bool:=true;
+         MainMenu_exit:=true;
+      end_if;
+      
+      if s="6" then
+         serSendString(port:=ServicePort, str:="$N");
+         serSendString(port:=ServicePort, str:="MODEM REBOOT..."+"$N");
+         boardReset();
+      end_if;
+      
+      if s="x" or s="X" then
+         MainMenu_exit:=true;
+         serSendString(port:=ServicePort, str:="$N");
+      end_if;
+   END_IF;
+
+End_Function;
+
+Function SerialIn;
+var 
+   RX_SI: array[0..1] of SINT;
+   s:string;
+   workingmode:string;
+end_var;
+workingmode:=LoadStringF(index:=19);
+if workingmode="arg" then workingmode:="ARG"; end_if;
+if workingmode="modem" then workingmode:="MODEM"; end_if;
+serSendString(port:=ServicePort, str:="$N");
+serSendString(port:=ServicePort, str:=">Working Mode : "+workingmode+" | Untuk Info & Setting ketik: mm >");
+
+RX_SerialIn(port:=ServicePort, enable:=TRUE, frame:=ADDR(RX_SI), maxSize:=SIZEOF(RX_SI), sof:=16#00, eof:=16#00);
+RX_SerialIn();
+if RX_SerialIn.ready then
+   s:=strFromMemory(src:=ADDR(RX_SI), len:=SIZEOF(RX_SI));
+   serFrameReceiveDone(port:=ServicePort);
+   serFlush(port:=ServicePort);
+   if s="mm" or s="MM" then
+      serSendString(port:=ServicePort, str:="$N");
+      MainMenu();
+      while not MainMenu_exit do
+         MainMenu();      
+      end_while;
+   end_if; 
+end_if;
+Sleep(delay:=3000);
+End_Function; //SerialIn
+
+Function SerialApn;
+var 
+   RX_SA: array[0..1] of SINT;
+   s:string;
+end_var;
+
+serSendString(port:=ServicePort, str:="$N");
+serSendString(port:=ServicePort, str:="> Untuk Setting APN ketik: pp >");
+
+RX_SerialApn(port:=ServicePort, enable:=TRUE, frame:=ADDR(RX_SA), maxSize:=SIZEOF(RX_SA), sof:=16#00, eof:=16#00);
+RX_SerialApn();
+if RX_SerialApn.ready then
+   s:=strFromMemory(src:=ADDR(RX_SA), len:=SIZEOF(RX_SA));
+   serFrameReceiveDone(port:=ServicePort);
+   serFlush(port:=ServicePort);
+   if s="pp" or s="PP" then
+      serSendString(port:=ServicePort, str:="$N");
+      PengaturanApn();
+      while not PengaturanApn_exit do
+         PengaturanApn();      
+      end_while;
+   end_if; 
+end_if;
+Sleep(delay:=3000);
+End_Function; //SerialApn
+
+Function Read_Campbell;
+var
+   RX_DT       : ARRAY[0..100] of SINT; 
+   RX_String:string;
+   timestamp,date,time,yyyy,mm,dd,hh,nn,ss:string;
+   rr,ws,ws_max,wd,tt_max,tt,tt_min,rh,pp,slr,slr_max:string;
+end_var;
+
+RX_String:="";
+RX_Data(port:=DataPort, enable:=true, frame:=addr(RX_DT), maxSize:=sizeof(RX_DT), sof:=0, eof:=16#0D);
+RX_Data();
+IF RX_Data.ready THEN  
+   RX_String:=strFromMemory(src:=addr(RX_DT), len:=sizeof(RX_DT));
+   DebugMsg(message:="Row Data AWS Campbell:"+ RX_String);
+   
+   if Debug_bool then serSendString(port:=ServicePort, str:="> DATA YANG DITERIMA  :" + RX_String + "$N"); end_if;
+   
+   serFrameReceiveDone(port:=DataPort); 
+   serFlush(port:=DataPort);
+   
+   timestamp:=strToken(str:=RX_String, delimiter:=",", index:=1);
+   date:=strToken(str:=timestamp, delimiter:=" ", index:=1);
+   date:=strMid(str:=date,start:=2,length:=strLen(str:=date));
+   yyyy:=strToken(str:=date, delimiter:="-", index:=1);
+   mm:=strToken(str:=date, delimiter:="-", index:=2);
+   dd:=strToken(str:=date, delimiter:="-", index:=3);
+   time:=strToken(str:=timestamp, delimiter:=" ", index:=2);
+   hh:=strToken(str:=time, delimiter:=":", index:=1);
+   nn:=strToken(str:=time, delimiter:=":", index:=2);
+   ss:=strToken(str:=time, delimiter:=":", index:=3);
+   ss:=strLeft(str:=ss,length:=2);
+   rr       :=strToken(str:=RX_String, delimiter:=",", index:=2);
+   ws       :=strToken(str:=RX_String, delimiter:=",", index:=3);
+   ws_max   :=strToken(str:=RX_String, delimiter:=",", index:=4);
+   wd       :=strToken(str:=RX_String, delimiter:=",", index:=5);
+   tt_max   :=strToken(str:=RX_String, delimiter:=",", index:=6);
+   tt       :=strToken(str:=RX_String, delimiter:=",", index:=7);
+   tt_min   :=strToken(str:=RX_String, delimiter:=",", index:=8);
+   rh       :=strToken(str:=RX_String, delimiter:=",", index:=9);
+   pp       :=strToken(str:=RX_String, delimiter:=",", index:=10);
+   slr      :=strToken(str:=RX_String, delimiter:=",", index:=11);
+   if slr="NAN" then slr:="-999.9"; end_if;
+   slr_max  :=strToken(str:=RX_String, delimiter:=",", index:=12);
+   if slr_max="NAN" then slr_max:="-999.9"; end_if;
+   
+   DebugMsg(message:="timestamp :"+timestamp);
+   DebugMsg(message:="yyyy:"+yyyy);                SaveString(index:=51,str:=yyyy);
+   DebugMsg(message:="mm:"+mm);                    SaveString(index:=52,str:=mm);
+   DebugMsg(message:="dd:"+dd);                    SaveString(index:=53,str:=dd);
+   DebugMsg(message:="hh:"+hh);                    SaveString(index:=54,str:=hh);
+   DebugMsg(message:="nn:"+nn);                    SaveString(index:=55,str:=nn);
+   DebugMsg(message:="ss:"+ss);                    SaveString(index:=56,str:=ss);
+   DebugMsg(message:="rr:"     +rr +" mm");        SaveString(index:=57,str:=rr);
+   DebugMsg(message:="ws_avg:" +ws +" m/s");       SaveString(index:=58,str:=ws);
+   DebugMsg(message:="ws_max:" +ws_max +" m/s");   SaveString(index:=59,str:=ws_max);
+   DebugMsg(message:="wd_avg:" +wd +" deg");       SaveString(index:=60,str:=wd);
+   DebugMsg(message:="tt_max:" +tt_max +" *C");    SaveString(index:=61,str:=tt_max);
+   DebugMsg(message:="tt_avg:" +tt+" *C");         SaveString(index:=62,str:=tt);
+   DebugMsg(message:="tt_min:" +tt_min+" *C");     SaveString(index:=63,str:=tt_min);
+   DebugMsg(message:="rh_avg:" +rh +" %");         SaveString(index:=64,str:=rh);
+   DebugMsg(message:="pp_avg:" +pp +" mBar");      SaveString(index:=65,str:=pp);
+   DebugMsg(message:="sr_avg:" +slr +" W/m2");     SaveString(index:=66,str:=slr);
+   DebugMsg(message:="sr_max:" +slr_max +" W/m2"); SaveString(index:=67,str:=slr_max);
+   Scan_Campbell:=true;
+Else
+   //DebugMsg(message:="Data AWS Campbell not Found");
+   if Debug_bool then serSendString(port:=ServicePort, str:="> DATA YANG DITERIMA  : Belum Tersedia"  + "$N"); end_if;
+   
+   Scan_Campbell:=false;
+END_IF; 
+END_FUNCTION;
+
+Function Log_Data
+var
+   yy,mm,dd,hh,nn,ss,bt:string;
+   rr,ws,ws_max,wd,tt_max,tt,tt_min,rh,pp,slr,slr_max:string;
+   header:string;
+   fd1,fd2,fd_harian  : FILE;
+   workingmode,tahun,logfile_harian:string;
+   Data_YDOC:string;
+end_var;
+DebugMsg(message:="Log Data Processing....");
+yy:=LoadString(index:=51);
+mm:=LoadString(index:=52);
+dd:=LoadString(index:=53);
+hh:=LoadString(index:=54);
+nn:=LoadString(index:=55);
+ss:=LoadString(index:=56);
+rr       :=LoadString(index:=57);
+ws       :=LoadString(index:=58);
+ws_max   :=LoadString(index:=59);
+wd       :=LoadString(index:=60);
+tt_max   :=LoadString(index:=61);
+tt       :=LoadString(index:=62);
+tt_min   :=LoadString(index:=63);
+rh       :=LoadString(index:=64);
+pp       :=LoadString(index:=65);
+slr      :=LoadString(index:=66);
+slr_max  :=LoadString(index:=67);
+bt:=LoadString(index:=7);
+workingmode:=LoadStringF(index:=19);
+tahun:=strRight(str:=yy, length:=2);
+
+//if workingmode="modem" or workingmode="MODEM" then
+//header   :="L;RR;Rain;mm;WS;Speed;m/s;WS_Max;Speed Max;m/s;WD;Direction;Deg;TT_Max;Temp Max;C;TT;Temp;C;TT_Min;Temp Min;C;RH;Hum;%;PP;Press;mBar;";
+//header   :=header+"SR;Solar;W/m2;SR_Max;Solar Max;W/m2;Bat;Baterai;Vdc;";
+//Data_YDOC :="D;"+tahun+mm+dd+hh+nn+"00;";
+//Data_YDOC :=Data_YDOC+"RR;"+rr+";WS;"+ws+";WS_Max;"+ws_max+";WD;"+wd+";TT_Max;"+tt_max+";TT;"+tt+";TT_Min;"+tt_min+";RH;"+rh+";PP;"+pp+";";
+//Data_YDOC :=Data_YDOC+"SR;"+slr+";SR_Max;"+slr_max+";Bat;"+bt+";";
+//end_if;
+
+//if workingmode="arg" or workingmode="ARG" then
+//header   :="L;Rain;Rainfall;mm;Bat;Battery;VDC;";
+//Data_YDOC :="D;"+tahun+mm+dd+hh+nn+"00;";
+//Data_YDOC :=Data_YDOC+"RR;"+rr+";Bat;"+bt+";";
+//end_if;
+
+//DebugMsg(message:="Data_YDOC:"+Data_YDOC);
+
+//if fsFileExists(name := logfile2) then
+   //fd2 := fsFileOpen(name := logfile2);
+//else
+   //fd2 := fsFileCreate(name := logfile2);
+   //fsFileWriteStringNL(fd := fd2, str :=header);
+//end_if;
+//fsFileWriteStringNL(fd := fd2, str :=Data_YDOC);
+//fsFileClose(fd := fd2);
+
+//datafile untuk memoricard data harian 
+logfile_harian:=yy+mm+dd+".txt";
+if fsFileExists(name := logfile_harian) then
+   fd_harian := fsFileOpen(name := logfile_harian);
+else
+   fd_harian := fsFileCreate(name := logfile_harian);
+   fsFileWriteStringNL(fd := fd_harian, str :=header);
+end_if;
+fsFileWriteStringNL(fd := fd_harian, str :=Data_YDOC);
+fsFileClose(fd := fd_harian);
+End_function;
+
+Function Ftp_Buffer;
+var
+   date:string;
+   time:string;
+   yy,mm,dd,hh,nn,ss:string;
+   rr,ws,ws_max,wd,tt_max,tt,tt_min,rh,pp,slr,slr_max,bt:string;
+   float_rr,float_ws,float_ws_max,float_wd,float_tt_max,float_tt,float_tt_min:float;
+   float_rh,float_pp,float_slr,float_slr_max,float_bt:float;
+   namefile:string;
+   open : int;
+   idFTP,ftp_send    : INT;
+   staid,workingmode,Data:string;
+   ftp_ip,ftp_port,ftp_user,ftp_password:string;
+   i:dint;
+   fd:FILE;
+   jumlah_record,max_record:dint;
+   
+end_var;
+workingmode:=LoadStringF(index:=19);
+jumlah_record:=logNumOfRecords();
+max_record:=logMaxNumOfRecords();
+      
+IF logNumOfRecords() > 0 then
+ logFirst();
+ for i:=1 to logNumOfRecords() by 1 do
+   logreader();  
+   if logreader.tag = 1 then    
+      //DebugMsg(message:="Buffer Address: "+dintToStr(v:=i)+" ready");
+      if workingmode="modem" or workingmode="MODEM" then
+         jumlah_record:=jumlah_record/2;
+         max_record:=max_record/2;
+         DebugMsg(message:="Jumlah Buffer terisi: "+dintToStr(v:=jumlah_record)+" of "+dintToStr(v:=max_record));
+         if Debug_bool then serSendString(port:=ServicePort, str:="> JUMLAH DATA GAGAL KIRIM : "+ dintToStr(v:=jumlah_record)+"/"+dintToStr(v:=max_record)+"$N"); end_if;
+      
+         date:=dintToStr(v:=logreader.value[1]);
+         yy:=strLeft(str:=date,length:=4);
+         mm:=strMid(str:=date,start:=5,length:=2);
+         dd:=strRight(str:=date,length:=2);
+      
+         time:=dintToStr(v:=logreader.value[2]);
+         if strLen(str:=time)=5 then time:="0"+time;end_if;
+         if strLen(str:=time)=4 then time:="00"+time;end_if;
+         if strLen(str:=time)=3 then time:="000"+time;end_if;
+         if strLen(str:=time)=2 then time:="0000"+time;end_if;
+         if strLen(str:=time)=1 then time:="00000"+time;end_if;
+         hh:=strLeft(str:=time,length:=2);
+         nn:=strMid(str:=time,start:=3,length:=2);
+         ss:=strRight(str:=time,length:=2);
+         
+         //linsectotime(Linsec:=logreader.value[2]);
+         //yy:=intToStr(v:=linsectotime.Year);
+         //mm:=sintToStr(v:=linsectotime.Month);
+         //dd:=sintToStr(v:=linsectotime.Day);
+         //hh:=sintToStr(v:=linsectotime.Hour);
+         //nn:=sintToStr(v:=linsectotime.Minute);
+         //dd:=sintToStr(v:=linsectotime.Second);
+      
+         rr      :=dintToStr(v:=logreader.value[3]);
+         float_rr:=strToFloat(str:=rr);
+         float_rr:=float_rr * 0.1;
+         rr:=floatToStr(v:=float_rr); 
+
+         ws      :=dintToStr(v:=logreader.value[4]);
+         float_ws:=strToFloat(str:=ws);
+         float_ws:=float_ws * 0.1;
+         ws:=floatToStr(v:=float_ws); 
+      
+         ws_max      :=dintToStr(v:=logreader.value[5]);
+         float_ws_max:=strToFloat(str:=ws_max);
+         float_ws_max:=float_ws_max * 0.1;
+         ws_max:=floatToStr(v:=float_ws_max); 
+      
+         wd      :=dintToStr(v:=logreader.value[6]);
+         float_wd:=strToFloat(str:=wd);
+         float_wd:=float_wd * 0.1;
+         wd:=floatToStr(v:=float_wd); 
+      
+         tt_max      :=dintToStr(v:=logreader.value[7]);
+         float_tt_max:=strToFloat(str:=tt_max);
+         float_tt_max:=float_tt_max * 0.1;
+         tt_max:=floatToStr(v:=float_tt_max); 
+      
+         tt      :=dintToStr(v:=logreader.value[8]);
+         float_tt:=strToFloat(str:=tt);
+         float_tt:=float_tt * 0.1;
+         tt:=floatToStr(v:=float_tt); 
+
+         logNext();
+         logreader();
+         if logreader.tag = 2 then      
+            tt_min      :=dintToStr(v:=logreader.value[1]);
+            float_tt_min:=strToFloat(str:=tt_min);
+            float_tt_min:=float_tt_min * 0.1;
+            tt_min:=floatToStr(v:=float_tt_min); 
+      
+            rh      :=dintToStr(v:=logreader.value[2]);
+            float_rh:=strToFloat(str:=rh);
+            float_rh:=float_rh * 0.1;
+            rh:=floatToStr(v:=float_rh);
+      
+            pp      :=dintToStr(v:=logreader.value[3]);
+            float_pp:=strToFloat(str:=pp);
+            float_pp:=float_pp * 0.1;
+            pp:=floatToStr(v:=float_pp);
+ 
+            slr      :=dintToStr(v:=logreader.value[4]);
+            float_slr:=strToFloat(str:=slr);
+            float_slr:=float_slr * 0.1;
+            slr:=floatToStr(v:=float_slr);
+      
+            slr_max  :=dintToStr(v:=logreader.value[5]);
+            float_slr_max:=strToFloat(str:=slr_max);
+            float_slr_max:=float_slr_max * 0.1;
+            slr_max:=floatToStr(v:=float_slr_max);
+      
+            bt      :=dintToStr(v:=logreader.value[6]);
+            float_bt:=strToFloat(str:=bt);
+            float_bt:=float_bt * 0.1;
+            bt:=floatToStr(v:=float_bt);
+          end_if;
+       
+         logPrev(); 
+         Data:=dd+"/"+mm+"/"+yy+","+hh+":"+nn+":"+"00"+",";
+         Data:=Data+rr+","+ws+","+ws_max+","+wd+","+tt_max+","+tt+","+tt_min+","+rh+","+pp+",";
+         Data:=Data+slr+","+slr_max+","+bt;
+       end_if;
+      
+      if workingmode="arg" or workingmode="ARG" then
+         DebugMsg(message:="Jumlah Buffer terisi:"+dintToStr(v:=jumlah_record)+" of "+dintToStr(v:=max_record));
+         if Debug_bool then serSendString(port:=ServicePort, str:="> JUMLAH DATA GAGAL KIRIM : "+ dintToStr(v:=jumlah_record)+"/"+dintToStr(v:=max_record)+"$N"); end_if;
+         dd  :=intToStr(v:=logreader.day); if strLen(str:=dd)= 1 then dd:="0"+dd; end_if;
+         mm  :=intToStr(v:=logreader.month); if strLen(str:=mm)= 1 then mm:="0"+mm; end_if;
+         yy  :=dintToStr(v:=logreader.year);
+
+         hh   :=intToStr(v:=logreader.hour); if strLen(str:=hh)= 1 then hh:="0"+hh; end_if;
+         nn :=intToStr(v:=logreader.minute); if strLen(str:=nn)= 1 then nn:="0"+nn; end_if;
+       
+         rr      :=dintToStr(v:=logreader.value[1]);
+         float_rr:=strToFloat(str:=rr);
+         float_rr:=float_rr * 0.1;
+         rr:=floatToStr(v:=float_rr); 
+         if strLen(str:=rr) = 1 then 
+            rr:=rr+".0"; 
+         end_if;
+      
+         bt      :=dintToStr(v:=logreader.value[2]);
+         float_bt:=strToFloat(str:=bt);
+         float_bt:=float_bt * 0.1;
+         bt:=floatToStr(v:=float_bt);
+      
+         Data:=dd+"/"+mm+"/"+yy+","+hh+":"+nn+":"+"00"+","+rr+","+bt;
+      end_if;
+      
+      DebugMsg(message:="Sinkronisasi Buffer Record["+dintToStr(v:=i)+"]: "+Data);
+      
+      ftp_ip:=LoadStringF(index:=7);
+      ftp_port:=LoadStringF(index:=8);
+      ftp_user:=LoadStringF(index:=9);
+      ftp_password:=LoadStringF(index:=10); 
+      staid:=LoadStringF(index:=11);
+
+      fd := fsFileCreate(name := "awsbuff.txt");
+      fsFileWriteString(fd := fd, str :=Data);
+      fsFileClose(fd := fd);
+      namefile:=staid+yy+mm+dd+hh+nn+".txt";
+      open:=ftpOpen();
+      If open=0 Then
+         idFTP := ftpConnect(host := ftp_ip, port:=strToDint(str:=ftp_port), username := ftp_user, password := ftp_password);
+         //DebugMsg(message:="idFTP:"+intToStr(v:=idFTP));
+         if idFTP > 0 then 
+            ftp_send:=ftpFileSend(id := idFTP, name :=namefile, local :="awsbuff.txt");
+            if ftp_send = 0 then
+               DebugMsg(message:= "Sinkronisasi FTP file to AWS Center:"+ftp_ip+ ":SUCCESS");
+               DebugMsg(message:= "Sinkronisasi File Name:" + namefile);
+               if Debug_bool then serSendString(port:=ServicePort, str:="> RE-FTP "+namefile+", Ke "+ftp_ip+": Berhasil"+"$N"); end_if;
+               logRewriteTag(tag:=0); 
+               logNext();
+               logRewriteTag(tag:=0);
+               logPrev();
+            else
+               DebugMsg(message:= "Sinkronisasi FTP file to AWS Center:"+ftp_ip+ "Failed, Error msg ftpFileSend: "+intToStr(v:=ftp_send));
+               DebugMsg(message:= "File Name:" + namefile);
+               if Debug_bool then serSendString(port:=ServicePort, str:="> RE-FTP  "+namefile+", Ke "+ftp_ip+": Gagal"+"$N"); end_if;
+            end_if;
+         else
+             DebugMsg(message:= "Sinkronisasi FTP file to AWS Center:"+ftp_ip+ " Failed, Error msg ftpConnect: "+intToStr(v:=idFTP));
+             DebugMsg(message:= "File Name:" + namefile);
+             if Debug_bool then serSendString(port:=ServicePort, str:="!> RE-FTP  "+namefile+", Ke "+ftp_ip+": Gagal"+"$N"); end_if;
+         end_if; 
+         ftpDisconnect(id := idFTP);
+         else
+             DebugMsg(message:= "Sinkronisasi FTP file to AWS Center:"+ftp_ip+ " Failed, Error msg ftpOpen: "+intToStr(v:=open));
+             DebugMsg(message:= "File Name:" + namefile);
+             if Debug_bool then serSendString(port:=ServicePort, str:="> RE-FTP  "+namefile+", Ke "+ftp_ip+": Gagal"+"$N"); end_if;   
+      End_If;
+      fsFileDelete(name :="awsbuff.txt");
+      ftpClose();
+      exit;
+   else
+      logNext();
+   end_if;
+   
+   if i= logNumOfRecords()then 
+      DebugMsg(message:="i:"+dintToStr(v:=i));
+      logClear() ;
+   end_if;
+ END_For;
+ELSE
+   DebugMsg(message:="Buffer Kosong");
+   if Debug_bool then  serSendString(port:=ServicePort, str:="> REKAMAN DATA GAGAL KIRIM : Tidak Ada"+"$N"); end_if;
+   
+END_IF;
+end_function;
+
+Function Ftp_Telemetri;
+var
+   yy:string;
+   mm:string;
+   dd:string;
+   hh:string;
+   nn:string;
+   ss:string;
+   namefile:string;
+   open : BOOL;
+   tahun:string;
+   idFTP,ftp_send    : INT;
+   ydoc_header,sernum,staid:string;
+   ftp_ip,ftp_port,ftp_user,ftp_password:string;
+end_var;
+
+ftp_ip:="telemetri.online";
+ftp_port:="21";
+ftp_user:="ydoc";
+ftp_password:="ydoc";
+staid:=LoadStringF(index:=11);
+
+yy          :=LoadString(index:=51);
+mm          :=LoadString(index:=52);
+dd          :=LoadString(index:=53);
+hh          :=LoadString(index:=54);
+nn          :=LoadString(index:=55);
+ss          :=LoadString(index:=56);
+
+ydoc_header :="YDOC";
+sernum      :=LoadString(index:=8);
+tahun:=strRight(str:=yy, length:=2);
+namefile:=ydoc_header+"_"+staid+"_"+sernum+"_"+tahun+mm+dd+"_"+hh+nn+ss+".txt";
+
+open := (ftpOpen() = 0);
+If open Then
+   idFTP := ftpConnect(host := ftp_ip, port:=strToDint(str:=ftp_port), username := ftp_user, password := ftp_password);
+   DebugMsg(message:="idFTP:"+intToStr(v:=idFTP));
+   if idFTP > 0 then 
+      ftp_send:=ftpFileSend(id := idFTP, name :=namefile, local :=logfile2);
+      if ftp_send = 0 then
+         DebugMsg(message:= "FTP file to Telemetri.id:"+ftp_ip+ ":SUCCESS");
+         DebugMsg(message:= "File Name:" + namefile);
+         fsFileDelete(name :=logfile2);
+      end_if;
+   else
+      DebugMsg(message:= "FTP file to Telemetri.id: FAILED. Error msg:"+intToStr(v:=idFTP));
+      end_if; 
+   ftpDisconnect(id := idFTP); 
+else
+   DebugMsg(message:="FTP file to Telemetri.id : not open");
+End_If;
+ftpClose();
+End_function;
+
+Function mqtt_publish:int;
+VAR
+   sta_id,client_id,mqtt_server,topik,mqtt_user,mqtt_pass  : STRING;
+   mqtt_port:dint;
+   mqtt  : INT;
+   rc_time,rc_rr,rc_bt    : INT;
+   rc_ws,rc_ws_max,rc_wd,rc_tt_max,rc_tt,rc_tt_min : Int;
+   rc_rh,rc_pp,rc_slr,rc_slr_max:int;
+   buf_time    : ARRAY [1..20] OF SINT;
+   buf_rr      : ARRAY [1..20] OF SINT;
+   buf_ws      : ARRAY [1..20] OF SINT;
+   buf_ws_max  : ARRAY [1..20] OF SINT;
+   buf_wd      : ARRAY [1..20] OF SINT;
+   buf_tt_max  : ARRAY [1..20] OF SINT;
+   buf_tt      : ARRAY [1..20] OF SINT;
+   buf_tt_min  : ARRAY [1..20] OF SINT;
+   buf_rh      : ARRAY [1..20] OF SINT;
+   buf_pp      : ARRAY [1..20] OF SINT;
+   buf_slr     : ARRAY [1..20] OF SINT;
+   buf_slr_max : ARRAY [1..20] OF SINT;
+   buf_bt      : ARRAY [1..20] OF SINT;
+   yy,mm,dd,hh,nn,ss,datetime,lokasi:string;
+   rr,ws,ws_max,wd,tt_max,tt,tt_min,rh,pp,slr,slr_max,bt,workingmode:string;
+END_VAR;
+   DebugMsg(message := "Initialize MQTT...");
+   workingmode:=LoadStringF(index:=19);
+   lokasi:=LoadStringF(index:=24);
+   sta_id:=LoadStringF(index:=11);
+   client_id  := sta_id+"_"+dintToStr(v:=boardSerialNumber());
+
+   mqtt_server:=LoadStringF(index:=13);
+   mqtt_port:=strToDint(str:=LoadStringF(index:=14));
+   mqtt_user:=LoadStringF(index:=15);
+   mqtt_pass:=LoadStringF(index:=16);
+   
+   yy:=LoadString(index:=51);
+   mm:=LoadString(index:=52);
+   dd:=LoadString(index:=53);
+   hh:=LoadString(index:=54);
+   nn:=LoadString(index:=55);
+   ss:=LoadString(index:=56);
+   
+   rr       :=LoadString(index:=57);
+   ws       :=LoadString(index:=58);
+   ws_max   :=LoadString(index:=59);
+   wd       :=LoadString(index:=60);
+   tt_max   :=LoadString(index:=61);
+   tt       :=LoadString(index:=62);
+   tt_min   :=LoadString(index:=63);
+   rh       :=LoadString(index:=64);
+   pp       :=LoadString(index:=65);
+   slr      :=LoadString(index:=66);
+   slr_max  :=LoadString(index:=67);
+   bt       :=LoadString(index:=7);
+   
+   if workingmode="arg" or workingmode="ARG"     then topik:="device/"+lokasi+"/arg/"+sta_id;end_if;
+   if workingmode="modem" or workingmode="MODEM" then topik:="device/"+lokasi+"/aws/"+sta_id;end_if;
+
+   datetime:=dd+"/"+mm+"/"+yy+" "+hh+":"+nn+":"+ss;
+   
+   mqtt  := mqttOpen(ip :=mqtt_server, port := mqtt_port, username:=mqtt_user, password:=mqtt_pass,clientid := client_id);
+   if mqtt>=0 then 
+      DebugMsg(message:="MQTT OPEN : SUCCESS");
+   else
+      DebugMsg(message:="MQTT OPEN : Too many MQTT Connection/Invalid Parameter");
+   end_if;
+        
+  strToMemory(dst := ADDR(buf_time), str := datetime, len := strLen(str := datetime)); 
+  rc_time := mqttPublish(
+         handle   := mqtt,
+         topic    := topik+"/time",
+         qos      := 0,
+         retained := TRUE,
+         data     := ADDR(buf_time),
+         size     := strLen(str := datetime)
+         );
+  if rc_time=0 then   
+      DebugMsg(message:="MQTT Publish time, SUCCESS, Message: "+datetime);
+   else
+      DebugMsg(message:="MQTT Publish time : Invalid Handle");
+   end_if;
+   
+  strToMemory(dst := ADDR(buf_bt), str := bt, len := strLen(str := bt)); //baterai
+  rc_bt := mqttPublish(
+         handle   := mqtt,
+         topic    := topik+"/bt",
+         qos      := 0,
+         retained := TRUE,
+         data     := ADDR(buf_bt),
+         size     := strLen(str := bt)
+         );
+  if rc_bt=0 then   
+      DebugMsg(message:="MQTT Publish battery : SUCCESS, Message: "+bt+" volt");
+  else
+      DebugMsg(message:="MQTT Publish battery : Invalid Handle");
+  end_if; 
+   
+  if workingmode="arg" or workingmode="ARG" then 
+      strToMemory(dst := ADDR(buf_rr), str := rr, len := strLen(str := rr)); 
+      rc_rr := mqttPublish(
+               handle   := mqtt,
+               topic    := topik+"/rr",
+               qos      := 0,
+               retained := TRUE,
+               data     := ADDR(buf_rr),
+               size     := strLen(str := rr)
+               );
+      if rc_rr=0 then   
+         DebugMsg(message:="MQTT Publish rain: SUCCESS, Message: "+rr+" mm");
+      else
+         DebugMsg(message:="MQTT Publish rain : Invalid Handle");
+      end_if; 
+  end_if; 
+  
+  if workingmode="modem" or workingmode="MODEM" then
+     strToMemory(dst := ADDR(buf_rr), str := rr, len := strLen(str := rr)); 
+      rc_rr := mqttPublish(
+               handle   := mqtt,
+               topic    := topik+"/rr",
+               qos      := 0,
+               retained := TRUE,
+               data     := ADDR(buf_rr),
+               size     := strLen(str := rr)
+               );
+      if rc_rr=0 then   
+         DebugMsg(message:="MQTT Publish rain: SUCCESS, Message: "+rr+" mm");
+      else
+         DebugMsg(message:="MQTT Publish rain : Invalid Handle");
+      end_if;
+     
+      strToMemory(dst := ADDR(buf_ws), str := ws, len := strLen(str := ws)); //kecepatan angin
+      rc_ws := mqttPublish(
+         handle   := mqtt,
+         topic    := topik+"/ws",
+         qos      := 0,
+         retained := TRUE,
+         data     := ADDR(buf_ws),
+         size     := strLen(str := ws)
+         );
+      if rc_ws=0 then   
+         DebugMsg(message:="MQTT Publish windspeed : SUCCESS, Message: "+ws+" m/s");
+      else
+         DebugMsg(message:="MQTT Publish windspeed : Invalid Handle");
+      end_if;
+
+      strToMemory(dst := ADDR(buf_ws_max), str := ws_max, len := strLen(str := ws_max)); //kecepatan angin max
+      rc_ws_max := mqttPublish(
+         handle   := mqtt,
+         topic    := topik+"/ws_max",
+         qos      := 0,
+         retained := TRUE,
+         data     := ADDR(buf_ws_max),
+         size     := strLen(str := ws_max)
+         );
+      if rc_ws=0 then   
+         DebugMsg(message:="MQTT Publish windspeed_max : SUCCESS, Message: "+ws_max+" m/s");
+      else
+         DebugMsg(message:="MQTT Publish windspeed_max : Invalid Handle");
+      end_if;
+      
+      strToMemory(dst := ADDR(buf_wd), str := wd, len := strLen(str := wd)); //arah angin
+      rc_wd := mqttPublish(
+         handle   := mqtt,
+         topic    := topik+"/wd",
+         qos      := 0,
+         retained := TRUE,
+         data     := ADDR(buf_wd),
+         size     := strLen(str := wd)
+         );
+      if rc_wd=0 then   
+         DebugMsg(message:="MQTT Publish windDirection : SUCCESS, Message: "+wd+" deg");
+      else
+         DebugMsg(message:="MQTT Publish windDirection : Invalid Handle");
+      end_if;
+   
+      
+      strToMemory(dst := ADDR(buf_tt_max), str := tt_max, len := strLen(str := tt_max)); //suhu max
+      rc_tt_max := mqttPublish(
+         handle   := mqtt,
+         topic    := topik+"/tt_max",
+         qos      := 0,
+         retained := TRUE,
+         data     := ADDR(buf_tt_max),
+         size     := strLen(str := tt_max)
+         );
+      if rc_tt_max=0 then   
+         DebugMsg(message:="MQTT Publish tt_max : SUCCESS, Message: "+tt_max+" C");
+      else
+         DebugMsg(message:="MQTT Publish tt_max : Invalid Handle");
+      end_if;
+      
+      strToMemory(dst := ADDR(buf_tt), str := tt, len := strLen(str := tt)); //suhu
+      rc_tt := mqttPublish(
+         handle   := mqtt,
+         topic    := topik+"/tt",
+         qos      := 0,
+         retained := TRUE,
+         data     := ADDR(buf_tt),
+         size     := strLen(str := tt)
+         );
+      if rc_tt=0 then   
+         DebugMsg(message:="MQTT Publish temperature : SUCCESS, Message: "+tt+" C");
+      else
+         DebugMsg(message:="MQTT Publish temperature : Invalid Handle");
+      end_if;
+      
+      
+      strToMemory(dst := ADDR(buf_tt_min), str := tt_min, len := strLen(str := tt_min)); // suhu min
+      rc_tt_min := mqttPublish(
+         handle   := mqtt,
+         topic    := topik+"/tt_min",
+         qos      := 0,
+         retained := TRUE,
+         data     := ADDR(buf_tt_min),
+         size     := strLen(str := tt_min)
+         );
+      if rc_tt_min=0 then   
+         DebugMsg(message:="MQTT Publish temperature_min : SUCCESS, Message: "+tt_min+" C");
+      else
+         DebugMsg(message:="MQTT Publish temperature_min : Invalid Handle");
+      end_if;
+      
+      
+      strToMemory(dst := ADDR(buf_rh), str := rh, len := strLen(str := rh)); //kelembapan
+      rc_rh := mqttPublish(
+         handle   := mqtt,
+         topic    := topik+"/rh",
+         qos      := 0,
+         retained := TRUE,
+         data     := ADDR(buf_rh),
+         size     := strLen(str := rh)
+         );
+      if rc_rh=0 then   
+         DebugMsg(message:="MQTT Publish kelembapan : SUCCESS, Message: "+rh+" %");
+      else
+         DebugMsg(message:="MQTT Publish kelembapan : Invalid Handle");
+      end_if;
+      
+      
+      strToMemory(dst := ADDR(buf_pp), str := pp, len := strLen(str := pp)); //kelembapan
+      rc_pp := mqttPublish(
+         handle   := mqtt,
+         topic    := topik+"/pp",
+         qos      := 0,
+         retained := TRUE,
+         data     := ADDR(buf_pp),
+         size     := strLen(str := pp)
+         );
+      if rc_rh=0 then   
+         DebugMsg(message:="MQTT Publish pressure : SUCCESS, Message: "+pp+" mbar");
+      else
+         DebugMsg(message:="MQTT Publish pressure : Invalid Handle");
+      end_if;
+      
+      strToMemory(dst := ADDR(buf_slr), str := slr, len := strLen(str :=slr)); //solar radiasi
+      rc_slr := mqttPublish(
+         handle   := mqtt,
+         topic    := topik+"/slr",
+         qos      := 0,
+         retained := TRUE,
+         data     := ADDR(buf_slr),
+         size     := strLen(str := slr)
+         );
+      if rc_slr=0 then   
+         DebugMsg(message:="MQTT Publish solar radiation : SUCCESS, Message: "+slr+" w/m2");
+      else
+         DebugMsg(message:="MQTT Publish solar radiation : Invalid Handle");
+      end_if;
+      
+      strToMemory(dst := ADDR(buf_slr_max), str := slr_max, len := strLen(str :=slr_max)); //solar radiasi max
+      rc_slr_max := mqttPublish(
+         handle   := mqtt,
+         topic    := topik+"/slr_max",
+         qos      := 0,
+         retained := TRUE,
+         data     := ADDR(buf_slr_max),
+         size     := strLen(str := slr_max)
+         );
+      if rc_slr_max=0 then   
+         DebugMsg(message:="MQTT Publish solar radiation_max : SUCCESS, Message: "+slr_max+" w/m2");
+      else
+         DebugMsg(message:="MQTT Publish solar radiation_max : Invalid Handle");
+      end_if;
+   end_if;      
+   mqttClose(handle := mqtt);   
+End_Function;
+
+FUNCTION Sms_In
+var
+   save_ok : INT;
+   change_ok   : INT :=3;
+   sms_phone,sms_send :STRING;
+   gsm_super : STRING :=  "+62816766074";
+   gsm_admin : STRING ;
+   gsm_report: STRING ;
+   gsm_alarm :STRING;
+   gsm_observer:STRING;
+   gsm_user1: STRING ;  
+   gsm_user2: STRING ;  
+   gsm_user3: STRING ;  
+   gsm_user4: STRING ;  
+   gsm_user5: STRING ; 
+   staid,yy,mm,dd,hh,nn,ss:string;
+   rr,ws,ws_max,wd,tt_max,tt,tt_min,rh,pp,slr,slr_max,bt:string;
+   boardsn,workingmode,gprsapn,gwmode,gwip,gwport,ftpip,lat,lon:string;
+   comp_result : INT;
+end_var;
+incoming();
+IF incoming.status > 0 THEN
+   gsmHangup();
+END_IF;
+   
+sms();
+IF sms.status = 1 THEN
+   gsm_admin   :=LoadStringF(index:=17);
+   gsm_alarm   :=LoadStringF(index:=18);
+   gsm_observer:=LoadStringF(index:=22);
+   gsm_report  :=LoadStringF(index:=30);
+   gsm_user1   :=LoadStringF(index:=31);
+   gsm_user2   :=LoadStringF(index:=32);
+   gsm_user3   :=LoadStringF(index:=33);
+   gsm_user4   :=LoadStringF(index:=34);
+   gsm_user5   :=LoadStringF(index:=35);
+   
+   
+   comp_result :=strLen(str:=gsm_report);
+   IF comp_result=0 THEN
+      gsm_report :=gsm_super;
+      SaveString(index:=30,str:=gsm_report); 
+   END_IF; 
+   
+   DebugMsg(message:="SMS Received :" + sms.phonenumber +","+ sms.message);
+   change_ok:=3;
+   updateio();
+   sms_phone   := strRight(str:=sms.phonenumber, length:=9);
+   
+   //-------GSM Admin & Report Setting by Superuser
+   comp_result := strFind(str1:=gsm_super, str2:=sms_phone, checkcase:=FALSE);
+   IF comp_result > 0 THEN
+         change_ok :=1;
+         sms_rec     := strLeft(str:=sms.message, length:=9);
+         comp_result := strCompare(str1:="SET ADMIN", str2:=sms_rec, checkcase:=FALSE);
+         IF comp_result = 0 THEN 
+            sms_len   := strLen(str:=sms.message)-10;
+            gsm_admin := strRight(str:=sms.message,length:=sms_len); 
+            SaveStringF(index:=17,str:=gsm_admin);
+            gsmSendSMS(phonenumber:=sms.phonenumber, message:=sms_send+" konfirmasi: update");
+         END_IF;
+
+         sms_rec     := strLeft(str:=sms.message, length:=10);
+         comp_result := strCompare(str1:="SET REPORT", str2:=sms_rec, checkcase:=FALSE);
+         IF comp_result = 0 THEN 
+            sms_len   := strLen(str:=sms.message)-11;
+            gsm_report:= strRight(str:=sms.message,length:=sms_len); 
+            SaveStringF(index:=30,str:=gsm_report); 
+            gsmSendSMS(phonenumber:=sms.phonenumber, message:=sms_send+" konfirmasi: update");
+         END_IF;   
+   END_IF;    
+   
+   //-------Parameter Setting by Admin
+   comp_result := strFind(str1:=gsm_admin, str2:=sms_phone, checkcase:=FALSE);
+   IF comp_result > 0 THEN 
+      change_ok :=1;
+   END_IF;   
+
+   IF change_ok = 1 THEN
+      //******RESET
+      sms_rec     := strLeft(str:=sms.message, length:=5);
+      comp_result := strCompare(str1:="RESET", str2:=sms_rec, checkcase:=FALSE);
+      IF comp_result = 0 THEN
+         gsmSendSMS(phonenumber:=sms.phonenumber, message:=sms_send+" konfirmasi: device reboot");
+         boardReset(); 
+         END_IF;
+      
+      // Set GPRS APN
+      sms_rec     := strLeft(str:=sms.message, length:=11);
+      comp_result := strCompare(str1:="SET GPRSAPN", str2:=sms_rec, checkcase:=FALSE);
+      IF comp_result = 0 THEN
+         sms_len := strLen(str:=sms.message)-12;
+         SaveStringF(index:=1,str:=strRight(str:=sms.message,length:=sms_len));
+         gsmSendSMS(phonenumber:=sms.phonenumber, message:=sms_send+" konfirmasi: update"); 
+      END_IF;    
+      // Set GPRS Username
+      sms_rec     := strLeft(str:=sms.message, length:=16);
+      comp_result := strCompare(str1:="SET GPRSUSERNAME", str2:=sms_rec, checkcase:=FALSE);
+      IF comp_result = 0 THEN
+         sms_len := strLen(str:=sms.message)-17;
+         SaveStringF(index:=2,str:=strRight(str:=sms.message,length:=sms_len));
+         gsmSendSMS(phonenumber:=sms.phonenumber, message:=sms_send+" konfirmasi: update");
+      END_IF;   
+      // Set GPRS Password
+      sms_rec     := strLeft(str:=sms.message, length:=16);
+      comp_result := strCompare(str1:="SET GPRSPASSWORD", str2:=sms_rec, checkcase:=FALSE);
+      IF comp_result = 0 THEN
+         sms_len := strLen(str:=sms.message)-17;
+         SaveStringF(index:=3,str:=strRight(str:=sms.message,length:=sms_len));
+         gsmSendSMS(phonenumber:=sms.phonenumber, message:=sms_send+" konfirmasi: update"); 
+      END_IF;
+      
+      
+      // Set GATEWAY ENABLED (Y/N)
+      sms_rec     := strLeft(str:=sms.message, length:=18);
+      comp_result := strCompare(str1:="SET GATEWAYENABLED", str2:=sms_rec, checkcase:=FALSE);
+      IF comp_result = 0 THEN
+         sms_len := strLen(str:=sms.message)-19;
+         SaveStringF(index:=4,str:=strRight(str:=sms.message,length:=sms_len));
+         gsmSendSMS(phonenumber:=sms.phonenumber, message:=sms_send+" konfirmasi: update"); 
+      END_IF; 
+      // Set GATEWAY IP Address
+      sms_rec     := strLeft(str:=sms.message, length:=13);
+      comp_result := strCompare(str1:="SET GATEWAYIP", str2:=sms_rec, checkcase:=FALSE);
+      IF comp_result = 0 THEN
+         sms_len := strLen(str:=sms.message)-14;
+         SaveStringF(index:=5,str:=strRight(str:=sms.message,length:=sms_len));
+         gsmSendSMS(phonenumber:=sms.phonenumber, message:=sms_send+" konfirmasi: update"); 
+      END_IF;
+      // Set GATEWAY Port
+      sms_rec     := strLeft(str:=sms.message, length:=15);
+      comp_result := strCompare(str1:="SET GATEWAYPORT", str2:=sms_rec, checkcase:=FALSE);
+      IF comp_result = 0 THEN
+         sms_len := strLen(str:=sms.message)-16;
+         SaveStringF(index:=6,str:=strRight(str:=sms.message,length:=sms_len));
+         gsmSendSMS(phonenumber:=sms.phonenumber, message:=sms_send+" konfirmasi: update"); 
+      END_IF;
+      
+      
+       //SET FTP IP Address
+      sms_rec     := strLeft(str:=sms.message, length:=9);
+      comp_result := strCompare(str1:="SET FTPIP", str2:=sms_rec, checkcase:=FALSE);
+      IF comp_result = 0 THEN 
+         sms_len := strLen(str:=sms.message)-10;
+         SaveStringF(index:=7,str:=strRight(str:=sms.message,length:=sms_len));
+         gsmSendSMS(phonenumber:=sms.phonenumber, message:=sms_send+" konfirmasi: update");
+      END_IF;     
+      //SET FTP PORT 
+      sms_rec     := strLeft(str:=sms.message, length:=11);
+      comp_result := strCompare(str1:="SET FTPPORT", str2:=sms_rec, checkcase:=FALSE);
+      IF comp_result = 0 THEN 
+         sms_len := strLen(str:=sms.message)-12;
+         SaveStringF(index:=8,str:=strRight(str:=sms.message,length:=sms_len)); 
+         gsmSendSMS(phonenumber:=sms.phonenumber, message:=sms_send+" konfirmasi: update");
+      END_IF; 
+      //SET FTP USERNAME 
+      sms_rec     := strLeft(str:=sms.message, length:=15);
+      comp_result := strCompare(str1:="SET FTPUSERNAME", str2:=sms_rec, checkcase:=FALSE);
+      IF comp_result = 0 THEN 
+         sms_len := strLen(str:=sms.message)-16;
+         SaveStringF(index:=9,str:=strRight(str:=sms.message,length:=sms_len)); 
+         gsmSendSMS(phonenumber:=sms.phonenumber, message:=sms_send+" konfirmasi: update");
+      END_IF;
+      //SET FTP PASSWORD
+      sms_rec     := strLeft(str:=sms.message, length:=15);
+      comp_result := strCompare(str1:="SET FTPPASSWORD", str2:=sms_rec, checkcase:=FALSE);
+      IF comp_result = 0 THEN 
+         sms_len := strLen(str:=sms.message)-16;
+         SaveStringF(index:=10,str:=strRight(str:=sms.message,length:=sms_len));
+         gsmSendSMS(phonenumber:=sms.phonenumber, message:=sms_send+" konfirmasi: update");
+      END_IF;
+      //SET FTP STASIUN ID
+      sms_rec     := strLeft(str:=sms.message, length:=16);
+      comp_result := strCompare(str1:="SET FTPSTASIUNID", str2:=sms_rec, checkcase:=FALSE);
+      IF comp_result = 0 THEN 
+         sms_len := strLen(str:=sms.message)-17;
+         SaveStringF(index:=11,str:=strRight(str:=sms.message,length:=sms_len));
+         gsmSendSMS(phonenumber:=sms.phonenumber, message:=sms_send+" konfirmasi: update");
+      END_IF;
+
+
+      //SET SOCK IP Address
+      sms_rec     := strLeft(str:=sms.message, length:=10);
+      comp_result := strCompare(str1:="SET SOCKIP", str2:=sms_rec, checkcase:=FALSE);
+      IF comp_result = 0 THEN 
+         sms_len := strLen(str:=sms.message)-11;
+         SaveStringF(index:=12,str:=strRight(str:=sms.message,length:=sms_len));
+         gsmSendSMS(phonenumber:=sms.phonenumber, message:=sms_send+" konfirmasi: update");
+      END_IF;
+      //SET SOCK PORT 
+      sms_rec     := strLeft(str:=sms.message, length:=12);
+      comp_result := strCompare(str1:="SET SOCKPORT", str2:=sms_rec, checkcase:=FALSE);
+      IF comp_result = 0 THEN 
+         sms_len := strLen(str:=sms.message)-13;
+         SaveStringF(index:=13,str:=strRight(str:=sms.message,length:=sms_len)); 
+         gsmSendSMS(phonenumber:=sms.phonenumber, message:=sms_send+" konfirmasi: update");
+      END_IF;
+      //SET SOCK STASIUN ID
+      sms_rec     := strLeft(str:=sms.message, length:=17);
+      comp_result := strCompare(str1:="SET SOCKSTASIUNID", str2:=sms_rec, checkcase:=FALSE);
+      IF comp_result = 0 THEN 
+         sms_len := strLen(str:=sms.message)-18;
+         SaveStringF(index:=14,str:=strRight(str:=sms.message,length:=sms_len));
+         gsmSendSMS(phonenumber:=sms.phonenumber, message:=sms_send+" konfirmasi: update");
+      END_IF;
+      
+      
+      //SET SMS BASE
+      sms_rec     := strLeft(str:=sms.message, length:=11);
+      comp_result := strCompare(str1:="SET SMSBASE", str2:=sms_rec, checkcase:=FALSE);
+      IF comp_result = 0 THEN 
+         sms_len := strLen(str:=sms.message)-12;
+         SaveStringF(index:=15,str:=strRight(str:=sms.message,length:=sms_len));
+         gsmSendSMS(phonenumber:=sms.phonenumber, message:=sms_send+" konfirmasi: update");
+      END_IF;
+      //SET SMS STASIUN ID
+      sms_rec     := strLeft(str:=sms.message, length:=16);
+      comp_result := strCompare(str1:="SET SMSSTASIUNID", str2:=sms_rec, checkcase:=FALSE);
+      IF comp_result = 0 THEN 
+         sms_len := strLen(str:=sms.message)-17;
+         SaveStringF(index:=16,str:=strRight(str:=sms.message,length:=sms_len));
+         gsmSendSMS(phonenumber:=sms.phonenumber, message:=sms_send+" konfirmasi: update");
+      END_IF;
+      
+      //SET GSM ALARM
+      sms_rec     := strLeft(str:=sms.message, length:=12);
+      comp_result := strCompare(str1:="SET GSMALARM", str2:=sms_rec, checkcase:=FALSE);
+      IF comp_result = 0 THEN 
+         sms_len := strLen(str:=sms.message)-13;
+         SaveStringF(index:=18,str:=strRight(str:=sms.message,length:=sms_len)); 
+         gsmSendSMS(phonenumber:=sms.phonenumber, message:=sms_send+" konfirmasi: update");
+      END_IF;      
+      //SET WORKING MODE
+      sms_rec     := strLeft(str:=sms.message, length:=15);
+      comp_result := strCompare(str1:="SET WORKINGMODE", str2:=sms_rec, checkcase:=FALSE);
+      IF comp_result = 0 THEN 
+         sms_len := strLen(str:=sms.message)-16;
+         SaveStringF(index:=19,str:=strRight(str:=sms.message,length:=sms_len)); 
+         gsmSendSMS(phonenumber:=sms.phonenumber, message:=sms_send+" konfirmasi: update");
+      END_IF;
+      
+      //SET RESOLUSI
+      sms_rec     := strLeft(str:=sms.message, length:=12);
+      comp_result := strCompare(str1:="SET RESOLUSI", str2:=sms_rec, checkcase:=FALSE);
+      IF comp_result = 0 THEN 
+         sms_len := strLen(str:=sms.message)-13;
+         SaveStringF(index:=20,str:=strRight(str:=sms.message,length:=sms_len)); 
+         gsmSendSMS(phonenumber:=sms.phonenumber, message:=sms_send+" konfirmasi: update");
+      END_IF;      
+      //SET INTERVAL
+      sms_rec     := strLeft(str:=sms.message, length:=12);
+      comp_result := strCompare(str1:="SET INTERVAL", str2:=sms_rec, checkcase:=FALSE);
+      IF comp_result = 0 THEN 
+         sms_len := strLen(str:=sms.message)-13;
+         SaveStringF(index:=21,str:=strRight(str:=sms.message,length:=sms_len)); 
+         gsmSendSMS(phonenumber:=sms.phonenumber, message:=sms_send+" konfirmasi: update");
+      END_IF;
+      //SET GSMOBSERVER
+      sms_rec     := strLeft(str:=sms.message, length:=15);
+      comp_result := strCompare(str1:="SET GSMOBSERVER", str2:=sms_rec, checkcase:=FALSE);
+      IF comp_result = 0 THEN 
+         sms_len := strLen(str:=sms.message)-16;
+         SaveStringF(index:=22,str:=strRight(str:=sms.message,length:=sms_len)); 
+         gsmSendSMS(phonenumber:=sms.phonenumber, message:=sms_send+" konfirmasi: update");
+      END_IF;  
+      //SET RESET TIME HUJAN 24 jam
+      sms_rec     := strLeft(str:=sms.message, length:=13);
+      comp_result := strCompare(str1:="SET RESETTIME", str2:=sms_rec, checkcase:=FALSE);
+      IF comp_result = 0 THEN 
+         sms_len := strLen(str:=sms.message)-14;
+         SaveStringF(index:=23,str:=strRight(str:=sms.message,length:=sms_len)); 
+         gsmSendSMS(phonenumber:=sms.phonenumber, message:=sms_send+" konfirmasi: update");
+      END_IF;
+
+      //******USER 
+      sms_rec     := strLeft(str:=sms.message, length:=9);
+      comp_result := strCompare(str1:="SET USER1", str2:=sms_rec, checkcase:=FALSE);
+      IF comp_result = 0 THEN 
+         sms_len := strLen(str:=sms.message)-10;
+         SaveStringF(index:=31,str:=strRight(str:=sms.message,length:=sms_len)); 
+         gsmSendSMS(phonenumber:=sms.phonenumber, message:=sms_send+" konfirmasi: update");
+      END_IF;
+
+      comp_result := strCompare(str1:="SET USER2", str2:=sms_rec, checkcase:=FALSE);
+      IF comp_result = 0 THEN 
+         sms_len := strLen(str:=sms.message)-10;
+         SaveString(index:=32,str:=strRight(str:=sms.message,length:=sms_len)); 
+         gsmSendSMS(phonenumber:=sms.phonenumber, message:=sms_send+" konfirmasi: update");
+      END_IF;
+        
+      comp_result := strCompare(str1:="SET USER3", str2:=sms_rec, checkcase:=FALSE);
+      IF comp_result = 0 THEN 
+         sms_len := strLen(str:=sms.message)-10;
+         SaveString(index:=33,str:=strRight(str:=sms.message,length:=sms_len)); 
+         gsmSendSMS(phonenumber:=sms.phonenumber, message:=sms_send+" konfirmasi: update");
+      END_IF;
+
+      comp_result := strCompare(str1:="SET USER4", str2:=sms_rec, checkcase:=FALSE);
+      IF comp_result = 0 THEN 
+         sms_len  := strLen(str:=sms.message)-10;
+         SaveString(index:=34,str:=strRight(str:=sms.message,length:=sms_len)); 
+         gsmSendSMS(phonenumber:=sms.phonenumber, message:=sms_send+" konfirmasi: update");
+      END_IF;
+
+      comp_result := strCompare(str1:="SET USER5", str2:=sms_rec, checkcase:=FALSE);
+      IF comp_result = 0 THEN 
+         sms_len  := strLen(str:=sms.message)-10;
+         SaveString(index:=35,str:=strRight(str:=sms.message,length:=sms_len)); 
+         gsmSendSMS(phonenumber:=sms.phonenumber, message:=sms_send+" konfirmasi: update");
+      END_IF;
+      //sms_send:=sms.message+" sudah diupdate";
+      //gsmSendSMS(phonenumber:=sms.phonenumber, message:=sms_send);     
+   END_IF;
+ 
+   //-------USER REQUEST DATA
+   sms_rec     := strLeft(str:=sms.message, length:=4);
+   comp_result := strCompare(str1:="DATA", str2:=sms_rec, checkcase:=FALSE);
+
+   IF comp_result = 0 THEN 
+      sms_phone   := strRight(str:=sms.phonenumber, length:=9);
+      comp_result := strFind(str1:=gsm_super, str2:=sms_phone, checkcase:=FALSE);
+      IF comp_result > 0 THEN incoming_ok :=1; END_IF;   
+
+      comp_result := strFind(str1:=gsm_admin, str2:=sms_phone, checkcase:=FALSE);
+      IF comp_result > 0 THEN incoming_ok :=1; END_IF;   
+
+      comp_result := strFind(str1:=gsm_report, str2:=sms_phone, checkcase:=FALSE);
+      IF comp_result > 0 THEN incoming_ok :=1; END_IF;
+      
+      comp_result := strFind(str1:=gsm_alarm, str2:=sms_phone, checkcase:=FALSE);
+      IF comp_result > 0 THEN incoming_ok :=1; END_IF;
+      
+      comp_result := strFind(str1:=gsm_observer, str2:=sms_phone, checkcase:=FALSE);
+      IF comp_result > 0 THEN incoming_ok :=1; END_IF;
+
+      comp_result := strFind(str1:=gsm_user1, str2:=sms_phone, checkcase:=FALSE);
+      IF comp_result > 0 THEN incoming_ok :=1; END_IF;   
+
+      comp_result := strFind(str1:=gsm_user2, str2:=sms_phone, checkcase:=FALSE);
+      IF comp_result > 0 THEN incoming_ok :=1; END_IF;   
+
+      comp_result := strFind(str1:=gsm_user3, str2:=sms_phone, checkcase:=FALSE);
+      IF comp_result > 0 THEN incoming_ok :=1; END_IF;   
+
+      comp_result := strFind(str1:=gsm_user4, str2:=sms_phone, checkcase:=FALSE);
+      IF comp_result > 0 THEN incoming_ok :=1; END_IF;   
+ 
+      comp_result := strFind(str1:=gsm_user5, str2:=sms_phone, checkcase:=FALSE);
+      IF comp_result > 0 THEN incoming_ok :=1; END_IF;   
+
+      IF incoming_ok=1 THEN
+         updateio();
+         staid    :=LoadStringF(index:=11);
+         workingmode:=LoadStringF(index:=19);
+         boardsn  :=LoadString(index:=8);
+         yy       :=LoadString(index:=51);
+         mm       :=LoadString(index:=52);
+         dd       :=LoadString(index:=53);
+         hh       :=LoadString(index:=54);
+         nn       :=LoadString(index:=55);
+         ss       :=LoadString(index:=56);
+         rr       :=LoadString(index:=57);
+         ws       :=LoadString(index:=58);
+         ws_max   :=LoadString(index:=59);
+         wd       :=LoadString(index:=60);
+         tt_max   :=LoadString(index:=61);
+         tt       :=LoadString(index:=62);
+         tt_min   :=LoadString(index:=63);
+         rh       :=LoadString(index:=64);
+         pp       :=LoadString(index:=65);
+         slr      :=LoadString(index:=66);
+         slr_max  :=LoadString(index:=67);
+         bt       :=LoadString(index:=7);
+         
+         if workingmode="modem" or workingmode="MODEM" then
+            sms_send := staid +","+dd+"/"+mm+"/"+yy+" "+hh+":"+nn+":"+ss+", ";
+            sms_send := sms_send +"RR:"+rr+" mm,"+ "WS:"+ws+" m/s,"+ "WS_Max:"+ws_max+" m/s,"+"WD:"+wd+" deg, ";
+            sms_send := sms_send +"TT_Max:"+tt_max+" *C, "+"TT:"+tt+" *C, "+"TT_Min:"+tt_min+" *C, "+"RH:"+rh+ " %, "+"PP:"+pp+" mbar, ";
+            sms_send := sms_send +"SR:"+slr+" W/m2, "+"SR_Max:"+slr_max+ " W/m2, ";
+            sms_send := sms_send +"Bat:"+bt+" volt";
+         End_if;
+         
+         if workingmode="arg" or workingmode="ARG" then
+            sms_send := staid +","+dd+"/"+mm+"/"+yy+" "+hh+":"+nn+":"+ss+", ";
+            sms_send := sms_send +"RR:"+rr+" mm,"+ "Bat:"+bt+" volt";
+         end_if;
+   
+         gsmSendSMS(phonenumber:=sms.phonenumber, message:=sms_send);
+         DebugMsg(message:="SMS Transmit to User:"+sms.phonenumber+ " Message:"+ sms_send);
+      END_IF; 
+   END_IF; 
+   
+   //Admin request INFORMASI
+   comp_result := strCompare(str1:="INFO", str2:=sms_rec, checkcase:=FALSE);
+   IF comp_result = 0 THEN 
+      sms_phone   := strRight(str:=sms.phonenumber, length:=9);
+      comp_result := strFind(str1:=gsm_super, str2:=sms_phone, checkcase:=FALSE);
+      IF comp_result > 0 THEN incoming_ok :=1; END_IF;   
+
+      comp_result := strFind(str1:=gsm_admin, str2:=sms_phone, checkcase:=FALSE);
+      IF comp_result > 0 THEN incoming_ok :=1; END_IF;   
+
+      comp_result := strFind(str1:=gsm_report, str2:=sms_phone, checkcase:=FALSE);
+      IF comp_result > 0 THEN incoming_ok :=1; END_IF;
+      
+      IF incoming_ok=1 THEN
+         updateio();
+         gprsapn     :=LoadStringF(index:=1);
+         gwmode     :=LoadStringF(index:=4);
+         if gwmode="y" or gwmode="Y" then
+            gwmode:="Enabled";
+         else
+            gwmode:="Disabled";
+         end_if;
+         gwip       :=LoadStringF(index:=5);
+         gwport     :=LoadStringF(index:=6);
+         ftpip      :=LoadStringF(index:=7);
+         lat:=LoadString(index:=10);   
+         lon:=LoadString(index:=11);
+         staid       :=LoadStringF(index:=11);
+         workingmode :=LoadStringF(index:=19);
+         boardsn  :=LoadString(index:=8);
+         yy       :=LoadString(index:=51);
+         mm       :=LoadString(index:=52);
+         dd       :=LoadString(index:=53);
+         hh       :=LoadString(index:=54);
+         nn       :=LoadString(index:=55);
+         ss       :=LoadString(index:=56);
+         rr       :=LoadString(index:=57);
+    
+         sms_send := dd+"/"+mm+"/"+yy+" "+hh+":"+nn+":"+ss+", StasiunID:"+staid+", Board SN:"+boardsn;
+         sms_send := sms_send +", WorkingMode:"+workingmode+", APN:"+gprsapn;
+         sms_send := sms_send +", GW Mode:"+gwmode+", GW IP:"+gwip+", GW Port:"+gwport+", Koordinat("+lat+","+lon+")";
+         gsmSendSMS(phonenumber:=sms.phonenumber, message:=sms_send);
+         DebugMsg(message:="SMS Transmit to User:"+sms.phonenumber+ " Message:"+ sms_send);
+      END_IF; 
+   END_IF;
+END_IF;
+END_FUNCTION;
+
+Function Read_Clock;
+var  
+   yyyy:string;
+   mm:string;
+   dd:string;
+   hh:string;
+   nn:string;
+   ss:string;
+   mod_scanning_log,interval_log:sint;
+   resetcount,waktu_reset:int;
+end_var;
+
+clock();
+yyyy  := intToStr (v:=clock.year);
+mm    := sintToStr(v:=clock.month);
+dd    := sintToStr(v:=clock.day);
+hh    := sintToStr(v:=clock.hour);
+nn    := sintToStr(v:=clock.minute);
+ss    := sintToStr(v:=clock.second); 
+       
+IF clock.month < 10 THEN  mm:= "0" + mm ; END_IF; 
+IF clock.day   < 10 THEN  dd:= "0" + dd ; END_IF;
+IF clock.hour  < 10 THEN  hh:= "0" + hh ; END_IF;
+IF clock.minute< 10 THEN  nn:= "0" + nn ; END_IF;
+IF clock.second< 10 THEN  ss:= "0" + ss ; END_IF;
+DebugMsg(message:="----------");
+DebugMsg(message:="DateTime:"+dd+"/"+mm+"/"+yyyy+" "+hh+":"+nn+":"+ss);
+if Debug_bool then serSendString(port:=ServicePort, str:="> DATE TIME           : "+dd+"/"+mm+"/"+yyyy+" "+hh+":"+nn+":"+ss+"$N"); end_if;
+SaveString(index:=51,str:=yyyy);
+SaveString(index:=52,str:=mm);
+SaveString(index:=53,str:=dd);
+SaveString(index:=54,str:=hh);
+SaveString(index:=55,str:=nn);
+SaveString(index:=56,str:=ss);
+
+interval_log:=strToSint(str:=LoadStringF(index:=21));//interval time perekaman data 
+waktu_reset:=strToInt(str:=LoadStringF(index:=23))+1;
+//if waktu_reset=0 then // waktu reset sensor hujan
+   //resettime:=(60*24)-2; 
+   //resettime:=1;
+   //else
+   //resettime:=(60*waktu_reset)-2;
+   //resettime:=(60*waktu_reset)-2;
+//end_if;
+
+resetcount:=(clock.hour*60)+clock.minute; //cek resettime
+DebugMsg(message:="waktu reset (menit):"+intToStr(v:=waktu_reset)); 
+DebugMsg(message:="waktu sekarang (menit):"+intToStr(v:=resetcount)); 
+if resetcount=waktu_reset then 
+   if mod_check_reset=false then
+      scanning_reset:=true;
+      mod_check_reset:=true;
+   end_if;
+else
+   mod_check_reset:=false;
+end_if;
+
+
+mod_scanning_log:=clock.minute mod interval_log; //log data file
+if mod_scanning_log=0 then 
+   if mod_check_log=false then
+      scanning_log:=true;
+      mod_check_log:=true;
+   end_if;
+else
+   mod_check_log:=false;
+end_if;
+
+End_Function;
+
+Function Read_ARG;
+var
+   staid,rf24h,bt:string;
+   yy,mm,dd,date:string;
+   gsm_observer,data_observer:string;
+   
+   res,str_rain_ctr:string;
+   res_float,float_rfbuffer,rain_float,float_rain_ctr:float;
+   hari,rf24flash:string;
+end_var;
+
+if scanning_reset then
+   yy:=LoadString(index:=51);
+   mm:=LoadString(index:=52);
+   dd:=LoadString(index:=53);
+   date:=dd+"/"+mm+"/"+yy;
+   staid:=LoadStringF(index:=11);
+   rf24h:=LoadString(index:=57);
+   bt:=LoadString(index:=7);
+   gsm_observer:=LoadStringF(index:=22);
+   data_observer:=staid+" "+date+", Rain: "+rf24h+" mm, Baterai: "+bt+" Volt";
+   gsmSendSMS(phonenumber := gsm_observer, message := data_observer);
+   DebugMsg(message:="SMS Transmit to User:"+gsm_observer+ " Message:"+ data_observer);
+   DebugMsg(message:="Reset ARG ke 0.0 mm");
+   SaveString(index:=57,str:="0.0");
+   rfbuffer:="0.0";
+   rain_24h.ld := TRUE;
+   rain_24h.ncv := 0;
+   rain_24h();
+   rain_24h.ld := FALSE;
+   rain_24h();
+   UPDATEIO();
+   scanning_reset:=false;
+   Sleep(delay:=30000);
+   Sleep(delay:=30000);
+   boardReset();
+end_if;
+
+res:=LoadStringF(index:=20);
+res_float:=strToFloat(str:=res);
+rain_24h();
+str_rain_ctr:=dintToStr(v:=rain_24h.cv);
+DebugMsg(message:="str_rain_ctr: "+str_rain_ctr);
+float_rfbuffer:=strToFloat(str:=rfbuffer);
+float_rain_ctr:=(strToFloat(str:=str_rain_ctr)*res_float)+float_rfbuffer;
+
+rf24h  :=floatToStr(v:=float_rain_ctr);
+if strLen(str:=rf24h) = 1 then 
+   rf24h:=rf24h+".0"; 
+end_if;
+DebugMsg(message:="rain:"+rf24h+ " mm");
+if Debug_bool then serSendString(port:=ServicePort, str:="> JUMLAH HUJAN 24 JAM : "+rf24h+" mm"+"$N"); end_if;
+SaveString(index:=57,str:=rf24h);
+End_Function;
+
+Function Read_InternalBaterai
+var
+   staid,smsphone,smsmsg:string;
+end_var;
+
+IF boardSupplyType() = 1  then
+   if not internal_baterai then
+   staid    :=LoadStringF(index:=11);
+   smsphone:=LoadStringF(index:=18);
+   DebugMsg(message:="Eksternal Baterai:Down, Internal Baterai:Up");
+   smsmsg:="ALERT: "+staid+ " BATERAI DOWN, INTERNAL BATERAI AKTIF, Internal Power Level="+sintToStr(v:=batPowerLevel())+" (0-5, 5=Power Max)";
+   gsmSendSMS(phonenumber:=smsphone, message:=smsmsg);
+   DebugMsg(message:="SMS Transmit to User:"+smsphone+ " Message:"+ smsmsg);
+   DebugMsg(message:="SMS Baterai Alert Transmit to User");
+   internal_baterai:=true; 
+   end_if;
+else
+   internal_baterai:=false;
+End_if;
+End_Function;
+
+PROGRAM awsarg;
+VAR
+workingmode:string;
+
+i:int;
+END_VAR;
+Inisialisasi();
+ctr_baterai:=0;
+fsMediaOpen(media := 1); 
+fsDirChange(path := "B:\");
+rain_24h.pinput := addr(dig_in5);
+
+serOpen(port:=ServicePort, baud:=9600, bit:=8, parity:=0);
+serOpen(port:=DataPort, baud:=9600, bit:=8, parity:=0);
+for i:=1 to 3 do
+   DebugMsg(message:="[Emergency Mode] Setting APN ");
+   SerialApn();
+   //SerialIn(); 
+   Sleep(delay:=3000);
+end_for;
+    
+Read_GSM();
+GPRS_Open();
+Gateway_Open();
+Read_Battery();
+
+BEGIN
+DebugMsg(message:="---V.3, last update: 1 Maret 2018---");
+Read_GPS();
+Read_GPRS();
+DebugMsg(message:="PPP-IP:"+LoadString(index:=19));
+Read_Gateway();
+DebugMsg(message:="Modem:"+LoadString(index:=20));
+Read_Battery();
+SerialIn(); 
+
+workingmode:=LoadStringF(index:=19);
+DebugMsg(message:="WorkingMode:"+workingmode);
+if Debug_bool then
+   serSendString(port:=ServicePort, str:="$N");
+   serSendString(port:=ServicePort, str:="_______________DEBUGGING_______________"+"$N");
+   serSendString(port:=ServicePort, str:="> WORKING MODE        : "+workingmode+ "$N");
+end_if;
+If workingmode="modem" or workingmode="MODEM" then
+   Read_Campbell();
+   if Scan_Campbell then
+      Log_Data();
+      Ftp_AwsCenter();
+      //Ftp_Telemetri();
+      if LoadStringF(index:=12)="y" or LoadStringF(index:=12)="Y"  then mqtt_publish(); end_if;//kirim data ke mqtt server jika aktif
+   end_if;
+   Ftp_Buffer();
+   DebugMsg(message:="-----End MODEM----");
+   if Debug_bool then serSendString(port:=ServicePort, str:="__________________END__________________"+"$N"); end_if;
+   DebugMsg(message:="");
+End_if;
+
+If workingmode="arg" or workingmode="ARG" then
+   Read_Clock();
+   Read_ARG();
+   if scanning_log then
+      Log_Data();
+      Ftp_AwsCenter();
+      //Ftp_Telemetri();
+      if LoadStringF(index:=12)="y" or LoadStringF(index:=12)="Y"  then mqtt_publish(); end_if;//kirim data ke mqtt server jika aktif
+      scanning_log:=false;
+   end_if;
+   Ftp_Buffer();
+   DebugMsg(message:="-----END ARG----");
+   DebugMsg(message:="");
+End_if;
+Sms_In();
+//Alert_Baterai();
+//Read_InternalBaterai();
+Sleep(delay:=5000);
+END;
+
+END_PROGRAM;
